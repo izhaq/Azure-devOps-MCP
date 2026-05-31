@@ -109,4 +109,54 @@ describe("AzureDevOpsClient", () => {
     const result = await client.getAll<number>("/_apis/projects");
     expect(result).toEqual([1, 2]);
   });
+
+  it("getAll honors an explicit limit smaller than maxResults", async () => {
+    const { impl, calls } = mockFetch([json({ value: [1, 2, 3, 4, 5, 6] })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const result = await client.getAll<number>("/_apis/projects", {}, 3);
+    expect(result).toEqual([1, 2, 3]);
+    // Per-page $top is derived from the remaining budget, not pageSize.
+    expect(calls[0]!.url).toContain("%24top=3");
+  });
+
+  it("getAll ignores a caller-supplied $top and derives it from the budget", async () => {
+    const { impl, calls } = mockFetch([json({ value: [1, 2] })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, pageSize: 50, fetchImpl: impl });
+    await client.getAll<number>("/_apis/projects", { query: { $top: 999 } }, 5);
+    expect(calls[0]!.url).toContain("%24top=5");
+    expect(calls[0]!.url).not.toContain("%24top=999");
+  });
+
+  it("getAll stops when a page returns no items but echoes a token (non-advancing server)", async () => {
+    const { impl, calls } = mockFetch([
+      json({ value: [] }, { headers: { "x-ms-continuationtoken": "STUCK" } }),
+      json({ value: [] }, { headers: { "x-ms-continuationtoken": "STUCK" } }),
+    ]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const result = await client.getAll<number>("/_apis/projects");
+    expect(result).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("getAll stops once the continuation token stops advancing", async () => {
+    const { impl, calls } = mockFetch([
+      json({ value: [1] }, { headers: { "x-ms-continuationtoken": "SAME" } }),
+      json({ value: [2] }, { headers: { "x-ms-continuationtoken": "SAME" } }),
+      json({ value: [3] }),
+    ]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const result = await client.getAll<number>("/_apis/projects");
+    // Page 2 echoes the same token it was given, so paging halts there
+    // rather than looping forever (the third page is never requested).
+    expect(result).toEqual([1, 2]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("getAll applies a per-call api-version override", async () => {
+    const { impl, calls } = mockFetch([json({ value: [] })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    await client.getAll("/_apis/teams", { apiVersion: "7.1-preview.3" });
+    expect(calls[0]!.url).toContain("api-version=7.1-preview.3");
+    expect(calls[0]!.url).not.toContain("api-version=7.1&");
+  });
 });

@@ -75,6 +75,40 @@ describe("configureCoreTools", () => {
     expect(calls[0]!.url).toContain("/DefaultCollection/_apis/teams");
   });
 
+  it("core_list_teams uses the preview api-version for the collection-wide endpoint", async () => {
+    const { calls, impl } = recordingFetch();
+    const { server, tools } = fakeServer();
+    configureCoreTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+    await tools.get("core_list_teams")!({}, {});
+    expect(calls[0]!.url).toContain("api-version=7.1-preview.3");
+  });
+
+  it("core_list_teams keeps the GA api-version for the project-scoped endpoint", async () => {
+    const { calls, impl } = recordingFetch();
+    const { server, tools } = fakeServer();
+    configureCoreTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+    await tools.get("core_list_teams")!({ project: "My Proj" }, {});
+    expect(calls[0]!.url).toContain("api-version=7.1");
+    expect(calls[0]!.url).not.toContain("preview");
+  });
+
+  it("core_list_projects honors the top argument by limiting returned items", async () => {
+    const manyFetch = (async (url: string | URL | Request) => {
+      void url;
+      return new Response(
+        JSON.stringify({ value: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const { server, tools } = fakeServer();
+    configureCoreTools(server, createToolDeps({ config, logger, fetchImpl: manyFetch }));
+    const result = (await tools.get("core_list_projects")!({ top: 2 }, {})) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    const projects = JSON.parse(result.content[0]!.text) as unknown[];
+    expect(projects).toHaveLength(2);
+  });
+
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
     const { calls, impl } = recordingFetch();
     const { server, tools } = fakeServer();
