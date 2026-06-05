@@ -6,6 +6,7 @@ import { createToolDeps } from "./context.js";
 import { DomainsManager } from "./shared/domains.js";
 import { buildServer } from "./server.js";
 import { startStdio } from "./transports/stdio.js";
+import { startHttp } from "./transports/http.js";
 import { packageVersion } from "./version.js";
 
 const HELP = `azure-devops-mcp v${packageVersion}
@@ -55,12 +56,20 @@ async function main(): Promise<void> {
   const domains = new DomainsManager(requestedDomains);
 
   const deps = createToolDeps({ config, logger });
-  const server = buildServer(deps, domains);
 
   if (values.http) {
-    throw new Error("HTTP transport is not yet implemented (T7). Use --stdio.");
+    const port = values.port ? Number(values.port) : config.httpPort;
+    await startHttp({ deps, domains, config: { ...config, httpPort: port }, logger });
+    logger.info("azure-devops-mcp started", {
+      transport: "http",
+      host: config.httpHost,
+      port,
+      domains: domains.list(),
+    });
+    return;
   }
 
+  const server = buildServer(deps, domains);
   await startStdio(server);
   logger.info("azure-devops-mcp started", {
     transport: "stdio",
