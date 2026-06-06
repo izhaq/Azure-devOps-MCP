@@ -48,8 +48,13 @@ export class AzureDevOpsClient {
     return this.request<T>("GET", path, undefined, options);
   }
 
-  async post<T>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
-    return this.request<T>("POST", path, body, options);
+  async post<T>(
+    path: string,
+    body: unknown,
+    options: RequestOptions = {},
+    contentType = "application/json",
+  ): Promise<T> {
+    return this.request<T>("POST", path, body, options, contentType);
   }
 
   async patch<T>(
