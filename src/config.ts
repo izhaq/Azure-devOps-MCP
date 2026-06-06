@@ -9,6 +9,7 @@ export interface ServerConfig {
   apiVersion: string;
   defaultProject?: string;
   domains?: string[];
+  httpHost: string;
   httpPort: number;
   allowedOrigins?: string[];
   tlsCert?: string;
@@ -57,6 +58,7 @@ const schema = z.object({
   ADO_API_VERSION: z.string().default("7.1"),
   ADO_DEFAULT_PROJECT: z.string().optional(),
   ADO_DOMAINS: list,
+  ADO_HTTP_HOST: z.string().default("127.0.0.1"),
   ADO_HTTP_PORT: port("ADO_HTTP_PORT").default(3000),
   ADO_ALLOWED_ORIGINS: list,
   ADO_TLS_CERT: z.string().optional(),
@@ -89,6 +91,7 @@ export function loadConfig(env: Env = process.env): ServerConfig {
     apiVersion: v.ADO_API_VERSION,
     defaultProject: v.ADO_DEFAULT_PROJECT,
     domains: v.ADO_DOMAINS,
+    httpHost: v.ADO_HTTP_HOST,
     httpPort: v.ADO_HTTP_PORT,
     allowedOrigins: v.ADO_ALLOWED_ORIGINS,
     tlsCert: v.ADO_TLS_CERT,

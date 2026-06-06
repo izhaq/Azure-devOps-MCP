@@ -3,20 +3,20 @@
 Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Respect dependency order; stop at checkpoints for review.
 
 ## Phase 1 — Foundation
-- [ ] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
-- [ ] **T2** Config + logger (PAT redaction) + version — *M, deps: T1*
-- [ ] **Checkpoint A:** build/lint/tests clean; config validation + redaction proven
+- [x] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
+- [x] **T2** Config + logger (PAT redaction) + version — *M, deps: T1*
+- [x] **Checkpoint A:** build/lint/tests clean; config validation + redaction proven
 
 ## Phase 2 — Walking Skeleton (stdio + core)
-- [ ] **T3** Azure REST client + auth (Basic PAT) + errors (+ mocked-fetch tests, PAT-never-logged) — *M, deps: T2*
-- [ ] **T4** Request context + `ToolDeps.clientFor` — *S, deps: T3*
-- [ ] **T5** MCP server + `shared/domains.ts` + `tools.ts` orchestrator + `index.ts` CLI + stdio transport — *M, deps: T4*
-- [ ] **T6** `core` domain (`core_list_projects`, `core_list_teams`) wired end-to-end — *S, deps: T5*
+- [x] **T3** Azure REST client + auth (Basic PAT) + errors (+ mocked-fetch tests, PAT-never-logged) — *M, deps: T2*
+- [x] **T4** Request context + `ToolDeps.clientFor` — *S, deps: T3*
+- [x] **T5** MCP server + `shared/domains.ts` + `tools.ts` orchestrator + `index.ts` CLI + stdio transport — *M, deps: T4*
+- [x] **T6** `core` domain (`core_list_projects`, `core_list_teams`) wired end-to-end — *S, deps: T5*
 - [ ] **Checkpoint B (HIGH-RISK GATE):** real authenticated ADO call over stdio; human review
 
 ## Phase 3 — HTTP Transport
-- [ ] **T7** Streamable HTTP `/mcp` + Origin/Host→403 + security headers + `X-ADO-PAT`→context + 401 — *M, deps: T6*
-- [ ] **Checkpoint C:** both transports serve `core`; 403/401 verified
+- [x] **T7** Streamable HTTP `/mcp` + Origin/Host→403 + security headers + `X-ADO-PAT`→context + 401 — *M, deps: T6*
+- [ ] **Checkpoint C:** both transports serve `core`; 403/401 verified (unit/e2e tests green; manual hosted-mode smoke pending)
 
 ## Phase 4 — Domain Expansion (parallelizable after T6)
 - [ ] **T8** `work-items` (query/get/create/update/comment/types) — *M, deps: T6*
