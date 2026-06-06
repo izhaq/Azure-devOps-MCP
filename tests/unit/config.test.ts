@@ -12,6 +12,7 @@ describe("loadConfig", () => {
     expect(cfg.pageSize).toBe(50);
     expect(cfg.maxResults).toBe(200);
     expect(cfg.timeoutMs).toBe(30000);
+    expect(cfg.httpHost).toBe("127.0.0.1");
     expect(cfg.httpPort).toBe(3000);
     expect(cfg.logLevel).toBe("info");
     expect(cfg.domains).toBeUndefined();

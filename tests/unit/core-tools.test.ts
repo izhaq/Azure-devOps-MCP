@@ -22,6 +22,7 @@ const config: ServerConfig = {
   collection: "DefaultCollection",
   pat: "cfg-pat",
   apiVersion: "7.1",
+  httpHost: "127.0.0.1",
   httpPort: 3000,
   pageSize: 50,
   maxResults: 200,
