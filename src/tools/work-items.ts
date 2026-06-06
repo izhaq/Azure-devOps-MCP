@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
+import { toPreviewVersion } from "../shared/api-version.js";
 
 /**
  * work-items domain: query, read, create, update, comment, and type metadata.
@@ -31,15 +32,6 @@ function fieldsToPatch(fields: Record<string, unknown>): JsonPatchOp[] {
   }));
 }
 
-/**
- * Some work-item sub-resources (e.g. comments) are only exposed under a preview
- * api-version. Derive it from the configured base so an operator-chosen version
- * is respected; a no-op if a preview is already configured.
- */
-function toPreviewVersion(version: string, revision: number): string {
-  return version.includes("-preview") ? version : `${version}-preview.${revision}`;
-}
-
 function asText(data: unknown): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
@@ -51,7 +43,10 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       description:
         "Run a WIQL (Work Item Query Language) query and return matching work item references.",
       inputSchema: {
-        query: z.string().describe("WIQL query text, e.g. SELECT [System.Id] FROM workitems"),
+        query: z
+          .string()
+          .min(1)
+          .describe("WIQL query text, e.g. SELECT [System.Id] FROM workitems"),
         project: z
           .string()
           .optional()
@@ -87,6 +82,11 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       },
     },
     async ({ id, fields, expand }, extra) => {
+      // ADO's Get Work Item treats `fields` and `$expand` as mutually exclusive
+      // and errors when both are supplied; reject at the boundary instead.
+      if (fields && fields.length > 0 && expand && expand !== "none") {
+        throw new Error("wit_get: 'fields' and 'expand' are mutually exclusive; pass only one.");
+      }
       const client = deps.clientFor(patFromExtra(extra));
       const item = await client.get(`/_apis/wit/workitems/${id}`, {
         query: {
@@ -103,10 +103,11 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     {
       description: "Create a work item of the given type from a map of field reference names.",
       inputSchema: {
-        project: z.string().describe("Project name or ID"),
-        type: z.string().describe("Work item type, e.g. Bug, Task, User Story"),
+        project: z.string().min(1).describe("Project name or ID"),
+        type: z.string().min(1).describe("Work item type, e.g. Bug, Task, User Story"),
         fields: z
           .record(z.string(), z.unknown())
+          .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
           .describe('Field map keyed by reference name, e.g. {"System.Title": "..."}'),
       },
     },
@@ -130,6 +131,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         id: z.number().int().positive().describe("Work item id"),
         fields: z
           .record(z.string(), z.unknown())
+          .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
           .describe('Field map keyed by reference name, e.g. {"System.State": "Active"}'),
       },
     },
@@ -150,9 +152,9 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     {
       description: "Add a comment to a work item.",
       inputSchema: {
-        project: z.string().describe("Project name or ID"),
+        project: z.string().min(1).describe("Project name or ID"),
         id: z.number().int().positive().describe("Work item id"),
-        text: z.string().describe("Comment text"),
+        text: z.string().min(1).describe("Comment text"),
       },
     },
     async ({ project, id, text }, extra) => {
@@ -160,7 +162,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       const comment = await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
-        { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 4) },
+        { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) },
       );
       return asText(comment);
     },
@@ -171,7 +173,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     {
       description: "List the available work item types for a project.",
       inputSchema: {
-        project: z.string().describe("Project name or ID"),
+        project: z.string().min(1).describe("Project name or ID"),
       },
     },
     async ({ project }, extra) => {

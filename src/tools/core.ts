@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
+import { toPreviewVersion } from "../shared/api-version.js";
 
 /**
  * Core domain: projects and teams.
@@ -12,17 +13,6 @@ import { type ToolDeps, patFromExtra } from "../context.js";
  *   https://learn.microsoft.com/en-us/rest/api/azure/devops/core/teams/get-teams (api-version 7.1)
  *   https://learn.microsoft.com/en-us/rest/api/azure/devops/core/teams/get-all-teams (api-version 7.1-preview.3)
  */
-
-/**
- * Collection-wide "Get All Teams" is only exposed under a preview api-version.
- * Derive the matching preview from the configured base version so the override
- * still respects an operator-chosen version (e.g. 6.0 → 6.0-preview.3) and is a
- * no-op if a preview is already configured.
- * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/core/teams/get-all-teams
- */
-function toPreviewVersion(version: string, revision: number): string {
-  return version.includes("-preview") ? version : `${version}-preview.${revision}`;
-}
 
 export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(

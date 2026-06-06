@@ -101,14 +101,24 @@ describe("configureWorkItemsTools", () => {
     expect(calls[0]!.url).toContain("/DefaultCollection/_apis/wit/workitems/42");
   });
 
-  it("wit_get forwards fields and $expand", async () => {
+  it("wit_get forwards a comma-joined fields list", async () => {
     const { calls, tools } = setup({ id: 42 });
-    await tools.get("wit_get")!(
-      { id: 42, fields: ["System.Title", "System.State"], expand: "relations" },
-      {},
-    );
+    await tools.get("wit_get")!({ id: 42, fields: ["System.Title", "System.State"] }, {});
     expect(calls[0]!.url).toContain("fields=System.Title%2CSystem.State");
+  });
+
+  it("wit_get forwards $expand", async () => {
+    const { calls, tools } = setup({ id: 42 });
+    await tools.get("wit_get")!({ id: 42, expand: "relations" }, {});
     expect(calls[0]!.url).toContain("%24expand=relations");
+  });
+
+  it("wit_get rejects passing both fields and expand (mutually exclusive)", async () => {
+    const { calls, tools } = setup({ id: 42 });
+    await expect(
+      tools.get("wit_get")!({ id: 42, fields: ["System.Title"], expand: "relations" }, {}),
+    ).rejects.toThrow(/mutually exclusive/);
+    expect(calls).toHaveLength(0);
   });
 
   it("wit_create POSTs a JSON-Patch document with json-patch content type", async () => {
@@ -140,7 +150,7 @@ describe("configureWorkItemsTools", () => {
     await tools.get("wit_add_comment")!({ project: "Proj", id: 100, text: "hi" }, {});
     expect(calls[0]!.method).toBe("POST");
     expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/workItems/100/comments");
-    expect(calls[0]!.url).toContain("api-version=7.1-preview");
+    expect(calls[0]!.url).toContain("api-version=7.1-preview.3");
     expect(calls[0]!.body).toEqual({ text: "hi" });
   });
 
