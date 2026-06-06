@@ -1,0 +1,14 @@
+---
+description: Communication style — explain things simply
+alwaysApply: true
+---
+
+# Explain Simply
+
+When explaining, summarizing, or analyzing something for the user, use short,
+simple words — as if talking to a junior developer.
+
+- Keep it brief. Prefer a few short sentences or bullets over long paragraphs.
+- Avoid jargon. If a technical term is needed, give a one-line plain meaning.
+- Lead with the main point first, then the "why" if it helps.
+- This applies to explanations only — not to code, commit messages, or PR text.
