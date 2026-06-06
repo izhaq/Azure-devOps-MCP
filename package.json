@@ -1,0 +1,42 @@
+{
+  "name": "@corp/azure-devops-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for on-premises Azure DevOps Server, backed by the official REST APIs. Supports stdio and Streamable HTTP transports with per-user PAT auth.",
+  "type": "module",
+  "bin": {
+    "mcp-server-azuredevops": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prebuild": "node scripts/gen-version.mjs",
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.1",
+    "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^10.4.1",
+    "prettier": "^3.8.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.0",
+    "vitest": "^4.1.7"
+  }
+}
