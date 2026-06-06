@@ -20,7 +20,7 @@ Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Res
 
 ## Phase 4 — Domain Expansion (parallelizable after T6)
 - [x] **T8** `work-items` (query/get/create/update/comment/types) — *M, deps: T6*
-- [ ] **T9** `repositories` Git read (list/branches/file/items/commits/commit) — *M, deps: T6*
+- [x] **T9** `repositories` Git read (list/branches/file/items/commits/commit) — *M, deps: T6*
 - [ ] **T10** Pull requests (list/get/create/comment/status/threads) — *M, deps: T9*
 - [ ] **T11** `pipelines` (pipelines + builds + queue + logs) — *M, deps: T6*
 - [ ] **T12** `work` boards/iterations (iterations/backlog/capacity) — *S, deps: T6*
