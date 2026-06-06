@@ -1,0 +1,163 @@
+import { describe, it, expect } from "vitest";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { configureWorkItemsTools } from "../../src/tools/work-items.js";
+import { createToolDeps } from "../../src/context.js";
+import { createLogger } from "../../src/logger.js";
+import type { ServerConfig } from "../../src/config.js";
+
+type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<{ content: unknown }>;
+
+function fakeServer() {
+  const tools = new Map<string, Handler>();
+  const server = {
+    registerTool: (name: string, _config: unknown, cb: Handler) => {
+      tools.set(name, cb);
+    },
+  } as unknown as McpServer;
+  return { server, tools };
+}
+
+const config: ServerConfig = {
+  serverUrl: "https://devops.corp.local/tfs",
+  collection: "DefaultCollection",
+  pat: "cfg-pat",
+  apiVersion: "7.1",
+  httpHost: "127.0.0.1",
+  httpPort: 3000,
+  pageSize: 50,
+  maxResults: 200,
+  timeoutMs: 30000,
+  logLevel: "error",
+};
+const logger = createLogger({ level: "error", sink: () => {} });
+
+interface Call {
+  url: string;
+  method: string;
+  auth: string;
+  contentType: string;
+  body: unknown;
+}
+
+function recordingFetch(responseBody: unknown = { value: [] }) {
+  const calls: Call[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    calls.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      auth: headers?.["Authorization"] ?? "",
+      contentType: headers?.["Content-Type"] ?? "",
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    });
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  return { calls, impl };
+}
+
+function setup(responseBody?: unknown) {
+  const { calls, impl } = recordingFetch(responseBody);
+  const { server, tools } = fakeServer();
+  configureWorkItemsTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+  return { calls, tools };
+}
+
+const TOOLS = [
+  "wit_query",
+  "wit_get",
+  "wit_create",
+  "wit_update",
+  "wit_add_comment",
+  "wit_list_types",
+];
+
+describe("configureWorkItemsTools", () => {
+  it("registers all work-item tools", () => {
+    const { tools } = setup();
+    expect([...tools.keys()].sort()).toEqual([...TOOLS].sort());
+  });
+
+  it("wit_query POSTs WIQL to the project-scoped wiql endpoint", async () => {
+    const { calls, tools } = setup({ workItems: [{ id: 1 }] });
+    await tools.get("wit_query")!({ project: "Proj", query: "SELECT [System.Id] FROM workitems" }, {});
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/wiql");
+    expect(calls[0]!.body).toEqual({ query: "SELECT [System.Id] FROM workitems" });
+  });
+
+  it("wit_query passes $top when a limit is given", async () => {
+    const { calls, tools } = setup({ workItems: [] });
+    await tools.get("wit_query")!({ query: "SELECT [System.Id] FROM workitems", top: 25 }, {});
+    expect(calls[0]!.url).toContain("%24top=25");
+  });
+
+  it("wit_get reads a single work item by id", async () => {
+    const { calls, tools } = setup({ id: 42, fields: {} });
+    await tools.get("wit_get")!({ id: 42 }, {});
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toContain("/DefaultCollection/_apis/wit/workitems/42");
+  });
+
+  it("wit_get forwards fields and $expand", async () => {
+    const { calls, tools } = setup({ id: 42 });
+    await tools.get("wit_get")!(
+      { id: 42, fields: ["System.Title", "System.State"], expand: "relations" },
+      {},
+    );
+    expect(calls[0]!.url).toContain("fields=System.Title%2CSystem.State");
+    expect(calls[0]!.url).toContain("%24expand=relations");
+  });
+
+  it("wit_create POSTs a JSON-Patch document with json-patch content type", async () => {
+    const { calls, tools } = setup({ id: 100 });
+    await tools.get("wit_create")!(
+      { project: "Proj", type: "Bug", fields: { "System.Title": "Boom", "System.State": "New" } },
+      {},
+    );
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/workitems/$Bug");
+    expect(calls[0]!.contentType).toBe("application/json-patch+json");
+    expect(calls[0]!.body).toEqual([
+      { op: "add", path: "/fields/System.Title", value: "Boom" },
+      { op: "add", path: "/fields/System.State", value: "New" },
+    ]);
+  });
+
+  it("wit_update PATCHes a JSON-Patch document by id", async () => {
+    const { calls, tools } = setup({ id: 100 });
+    await tools.get("wit_update")!({ id: 100, fields: { "System.State": "Active" } }, {});
+    expect(calls[0]!.method).toBe("PATCH");
+    expect(calls[0]!.url).toContain("/DefaultCollection/_apis/wit/workitems/100");
+    expect(calls[0]!.contentType).toBe("application/json-patch+json");
+    expect(calls[0]!.body).toEqual([{ op: "add", path: "/fields/System.State", value: "Active" }]);
+  });
+
+  it("wit_add_comment POSTs the comment to the preview comments endpoint", async () => {
+    const { calls, tools } = setup({ id: 1, text: "hi" });
+    await tools.get("wit_add_comment")!({ project: "Proj", id: 100, text: "hi" }, {});
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/workItems/100/comments");
+    expect(calls[0]!.url).toContain("api-version=7.1-preview");
+    expect(calls[0]!.body).toEqual({ text: "hi" });
+  });
+
+  it("wit_list_types lists work item types for a project", async () => {
+    const { calls, tools } = setup({ value: [{ name: "Bug" }, { name: "Task" }] });
+    const result = (await tools.get("wit_list_types")!({ project: "Proj" }, {})) as {
+      content: Array<{ type: string; text: string }>;
+    };
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/workitemtypes");
+    const types = JSON.parse(result.content[0]!.text) as Array<{ name: string }>;
+    expect(types.map((t) => t.name)).toEqual(["Bug", "Task"]);
+  });
+
+  it("uses the per-request PAT from the x-ado-pat header when present", async () => {
+    const { calls, tools } = setup({ id: 1 });
+    const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };
+    await tools.get("wit_get")!({ id: 1 }, extra);
+    expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(":req-pat").toString("base64")}`);
+  });
+});

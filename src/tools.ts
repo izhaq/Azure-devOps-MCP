@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolDeps } from "./context.js";
 import { Domain, DomainsManager } from "./shared/domains.js";
 import { configureCoreTools } from "./tools/core.js";
+import { configureWorkItemsTools } from "./tools/work-items.js";
 
 /**
  * Registers all enabled tool domains with the server.
@@ -13,6 +14,7 @@ export function registerTools(server: McpServer, deps: ToolDeps, domains: Domain
   };
 
   whenEnabled(Domain.CORE, () => configureCoreTools(server, deps));
-  // Additional domains (work, work-items, repositories, pipelines, wiki, test-plans)
-  // are wired in their respective tasks (T8–T14).
+  whenEnabled(Domain.WORK_ITEMS, () => configureWorkItemsTools(server, deps));
+  // Remaining domains (work, repositories, pipelines, wiki, test-plans)
+  // are wired in their respective tasks (T9–T14).
 }
