@@ -130,6 +130,32 @@ describe("handleMcpRequest", () => {
     expectSecurityHeaders(res);
   });
 
+  it("returns 401 when the X-ADO-PAT header is whitespace-only", async () => {
+    const res = await handleMcpRequest(
+      new Request("http://127.0.0.1:3000/mcp", {
+        method: "POST",
+        headers: { ...MCP_HEADERS, "x-ado-pat": "   " },
+        body: rpc("tools/list"),
+      }),
+      makeCtx(),
+    );
+    expect(res.status).toBe(401);
+    expectSecurityHeaders(res);
+  });
+
+  it("returns 413 when the declared content-length exceeds the body cap", async () => {
+    const res = await handleMcpRequest(
+      new Request("http://127.0.0.1:3000/mcp", {
+        method: "POST",
+        headers: { ...MCP_HEADERS, "x-ado-pat": "p", "content-length": String(8 * 1024 * 1024) },
+        body: rpc("tools/list"),
+      }),
+      makeCtx(),
+    );
+    expect(res.status).toBe(413);
+    expectSecurityHeaders(res);
+  });
+
   it("lists the core tools on a tools/list call carrying a PAT", async () => {
     const { impl } = recordingFetch();
     const res = await handleMcpRequest(
@@ -160,6 +186,29 @@ describe("handleMcpRequest", () => {
     expect(res.status).toBe(200);
     expect(calls[0]!.url).toContain("/DefaultCollection/_apis/projects");
     expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(":req-pat").toString("base64")}`);
+  });
+
+  it("does not leak the PAT between sequential requests sharing one context", async () => {
+    const { calls, impl } = recordingFetch();
+    const ctx = makeCtx({}, impl);
+    const callWith = (pat: string) =>
+      handleMcpRequest(
+        new Request("http://127.0.0.1:3000/mcp", {
+          method: "POST",
+          headers: { ...MCP_HEADERS, "x-ado-pat": pat },
+          body: rpc("tools/call", { name: "core_list_projects", arguments: {} }),
+        }),
+        ctx,
+      );
+
+    const first = await callWith("pat-alice");
+    const second = await callWith("pat-bob");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(":pat-alice").toString("base64")}`);
+    expect(calls[1]!.auth).toBe(`Basic ${Buffer.from(":pat-bob").toString("base64")}`);
   });
 });
 

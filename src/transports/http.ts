@@ -1,4 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import https from "node:https";
+import { readFileSync } from "node:fs";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { ServerConfig } from "../config.js";
 import type { Logger } from "../logger.js";
@@ -9,6 +11,12 @@ import { PAT_HEADER } from "../context.js";
 
 /** Single MCP endpoint path (MCP Streamable HTTP transport). */
 const MCP_PATH = "/mcp";
+
+/** Max accepted request body size; guards against an unbounded-body OOM. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/** Thrown when a request body exceeds {@link MAX_BODY_BYTES}. */
+class PayloadTooLargeError extends Error {}
 
 /**
  * Security response headers applied to every HTTP response (MCP transport
@@ -49,6 +57,10 @@ export async function handleMcpRequest(request: Request, ctx: HttpContext): Prom
     // Stateless mode: no standalone SSE stream (GET) or session teardown (DELETE).
     return errorResponse(405, -32600, "Method Not Allowed. Use POST.", { Allow: "POST" });
   }
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return errorResponse(413, -32600, "Payload Too Large.");
+  }
   const pat = request.headers.get(PAT_HEADER);
   if (!pat || pat.trim().length === 0) {
     return errorResponse(401, -32001, `Unauthorized: missing ${PAT_HEADER} header.`);
@@ -76,13 +88,29 @@ export async function handleMcpRequest(request: Request, ctx: HttpContext): Prom
 }
 
 /**
- * Start the Streamable HTTP transport on a `node:http` server bound to
- * `config.httpHost:config.httpPort`. Returns the listening server.
+ * Start the Streamable HTTP transport bound to `config.httpHost:config.httpPort`.
+ *
+ * If both `tlsCert` and `tlsKey` are configured, serves over HTTPS. Otherwise
+ * serves plain HTTP — which is only safe over loopback. Hosted deployments that
+ * bind a network interface (e.g. `ADO_HTTP_HOST=0.0.0.0`) MUST supply TLS here
+ * or sit behind a TLS-terminating reverse proxy; otherwise per-user PATs travel
+ * in cleartext. Returns the listening server.
  */
-export async function startHttp(ctx: HttpContext): Promise<http.Server> {
-  const server = http.createServer((req, res) => {
+export async function startHttp(ctx: HttpContext): Promise<http.Server | https.Server> {
+  const handler = (req: IncomingMessage, res: ServerResponse): void => {
     void handleNodeRequest(req, res, ctx);
-  });
+  };
+  const { tlsCert, tlsKey } = ctx.config;
+  const server =
+    tlsCert && tlsKey
+      ? https.createServer({ cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }, handler)
+      : http.createServer(handler);
+  if (!(tlsCert && tlsKey) && ctx.config.httpHost !== "127.0.0.1" && ctx.config.httpHost !== "localhost") {
+    ctx.logger.warn(
+      "HTTP transport is serving plaintext on a non-loopback interface; per-user PATs will travel in cleartext. Configure ADO_TLS_CERT/ADO_TLS_KEY or front this with a TLS-terminating reverse proxy.",
+      { host: ctx.config.httpHost },
+    );
+  }
   await new Promise<void>((resolve) => {
     server.listen(ctx.config.httpPort, ctx.config.httpHost, resolve);
   });
@@ -99,6 +127,10 @@ async function handleNodeRequest(
     const response = await handleMcpRequest(request, ctx);
     await writeNodeResponse(res, response);
   } catch (err) {
+    if (err instanceof PayloadTooLargeError) {
+      await writeNodeResponse(res, errorResponse(413, -32600, "Payload Too Large."));
+      return;
+    }
     ctx.logger.error("http request failed", {
       message: err instanceof Error ? err.message : String(err),
     });
@@ -198,7 +230,16 @@ async function toWebRequest(req: IncomingMessage, ctx: HttpContext): Promise<Req
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let total = 0;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new PayloadTooLargeError("request body exceeds limit"));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });

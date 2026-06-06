@@ -25,6 +25,20 @@ Options:
 Configuration is read from environment variables (see .env.example).
 `;
 
+/**
+ * Resolve the HTTP port from the `--port` flag, falling back to the configured
+ * value. The env path is validated by zod; this validates the CLI flag so a
+ * non-numeric `--port` errors instead of silently binding a random port.
+ */
+function resolvePort(flag: string | undefined, fallback: number): number {
+  if (flag === undefined) return fallback;
+  const parsed = Number(flag);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid --port "${flag}": must be a positive integer.`);
+  }
+  return parsed;
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
@@ -58,7 +72,7 @@ async function main(): Promise<void> {
   const deps = createToolDeps({ config, logger });
 
   if (values.http) {
-    const port = values.port ? Number(values.port) : config.httpPort;
+    const port = resolvePort(values.port, config.httpPort);
     await startHttp({ deps, domains, config: { ...config, httpPort: port }, logger });
     logger.info("azure-devops-mcp started", {
       transport: "http",
