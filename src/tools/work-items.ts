@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { toPreviewVersion } from "../shared/api-version.js";
+import { asText } from "./_shared.js";
 
 /**
  * work-items domain: query, read, create, update, comment, and type metadata.
@@ -30,10 +31,6 @@ function fieldsToPatch(fields: Record<string, unknown>): JsonPatchOp[] {
     path: `/fields/${name}`,
     value,
   }));
-}
-
-function asText(data: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
 export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void {

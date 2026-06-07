@@ -17,6 +17,19 @@ export interface AzureClientOptions {
 
 export type QueryValue = string | number | boolean | undefined;
 
+/**
+ * Clamp a caller's requested result count to `[0, maxResults]`.
+ *
+ * A caller's `top` is intent ("give me at most N"); the configured
+ * `maxResults` is a hard ceiling that protects memory and payload size. When
+ * `requested` is omitted the ceiling itself becomes the limit. Shared by
+ * `getAll` and by list tools that bound results client-side, so every list
+ * path applies the same `min(requested ?? maxResults, maxResults)` rule.
+ */
+export function boundLimit(requested: number | undefined, maxResults: number): number {
+  return Math.min(Math.max(requested ?? maxResults, 0), maxResults);
+}
+
 export interface RequestOptions {
   project?: string;
   query?: Record<string, QueryValue>;
@@ -81,7 +94,7 @@ export class AzureDevOpsClient {
     options: RequestOptions = {},
     limit = this.opts.maxResults,
   ): Promise<T[]> {
-    const cap = Math.min(Math.max(limit, 0), this.opts.maxResults);
+    const cap = boundLimit(limit, this.opts.maxResults);
     const callerQuery = { ...options.query };
     delete callerQuery.$top;
 

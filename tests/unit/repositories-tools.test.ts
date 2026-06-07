@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { configureRepositoriesTools } from "../../src/tools/repositories.js";
 import { createToolDeps } from "../../src/context.js";
-import { createLogger } from "../../src/logger.js";
+import { createLogger, type Logger } from "../../src/logger.js";
 import type { ServerConfig } from "../../src/config.js";
 
 type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<{ content: unknown }>;
@@ -37,7 +37,7 @@ interface Call {
   auth: string;
 }
 
-function recordingFetch(responseBody: unknown = { value: [] }) {
+function recordingFetch(responseBody: unknown = { value: [] }, status = 200) {
   const calls: Call[] = [];
   const impl = (async (url: string | URL | Request, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string> | undefined;
@@ -47,18 +47,33 @@ function recordingFetch(responseBody: unknown = { value: [] }) {
       auth: headers?.["Authorization"] ?? "",
     });
     return new Response(JSON.stringify(responseBody), {
-      status: 200,
+      status,
       headers: { "content-type": "application/json" },
     });
   }) as unknown as typeof fetch;
   return { calls, impl };
 }
 
-function setup(responseBody?: unknown) {
-  const { calls, impl } = recordingFetch(responseBody);
+interface SetupOptions {
+  status?: number;
+  config?: ServerConfig;
+  logger?: Logger;
+}
+
+function setup(responseBody?: unknown, options: SetupOptions = {}) {
+  const { calls, impl } = recordingFetch(responseBody, options.status);
   const { server, tools } = fakeServer();
-  configureRepositoriesTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+  configureRepositoriesTools(
+    server,
+    createToolDeps({ config: options.config ?? config, logger: options.logger ?? logger, fetchImpl: impl }),
+  );
   return { calls, tools };
+}
+
+/** Parse the JSON array a list tool returns in its single text block. */
+function parseList(result: unknown): unknown[] {
+  const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
+  return JSON.parse(text) as unknown[];
 }
 
 const TOOLS = [
@@ -145,5 +160,98 @@ describe("configureRepositoriesTools", () => {
     const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };
     await tools.get("repo_list")!({}, extra);
     expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(":req-pat").toString("base64")}`);
+  });
+
+  it("surfaces a mapped ADO error when the REST call returns a 4xx", async () => {
+    const { tools } = setup({ message: "TF401019: repo not found" }, { status: 404 });
+    await expect(
+      tools.get("repo_get_commit")!({ repositoryId: "repo1", commitId: "deadbeef" }, {}),
+    ).rejects.toThrow(/Azure DevOps API error 404: TF401019/);
+  });
+
+  it("repo_list routes collection-wide (no project segment) when project is omitted", async () => {
+    const { calls, tools } = setup({ value: [] });
+    await tools.get("repo_list")!({}, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/_apis/git/repositories");
+    expect(calls[0]!.url).not.toContain("/DefaultCollection/Proj/");
+  });
+
+  it("repo_list_commits routes collection-wide (no project segment) when project is omitted", async () => {
+    const { calls, tools } = setup({ value: [] });
+    await tools.get("repo_list_commits")!({ repositoryId: "repo1" }, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/_apis/git/repositories/repo1/commits");
+    expect(calls[0]!.url).not.toContain("/DefaultCollection/Proj/");
+  });
+
+  describe("bounds results to maxResults", () => {
+    const smallConfig: ServerConfig = { ...config, maxResults: 2 };
+    const fivePage = { value: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }] };
+
+    it("repo_list returns at most maxResults", async () => {
+      const { tools } = setup(fivePage, { config: smallConfig });
+      const repos = parseList(await tools.get("repo_list")!({}, {}));
+      expect(repos).toHaveLength(2);
+    });
+
+    it("repo_list_items returns at most maxResults even with recursionLevel full", async () => {
+      const { tools } = setup(fivePage, { config: smallConfig });
+      const items = parseList(
+        await tools.get("repo_list_items")!({ repositoryId: "repo1", recursionLevel: "full" }, {}),
+      );
+      expect(items).toHaveLength(2);
+    });
+
+    it("repo_list_commits returns at most maxResults when top is omitted", async () => {
+      const { calls, tools } = setup(fivePage, { config: smallConfig });
+      const commits = parseList(
+        await tools.get("repo_list_commits")!({ repositoryId: "repo1" }, {}),
+      );
+      expect(commits).toHaveLength(2);
+      // The cap is also pushed to the server so it does not over-return.
+      expect(calls[0]!.url).toContain("searchCriteria.%24top=2");
+    });
+  });
+
+  it("repo_get_file omits content above the inline byte limit instead of returning it", async () => {
+    const huge = "a".repeat(1_000_001);
+    const { tools } = setup({ path: "/big.bin", content: huge });
+    const result = (await tools.get("repo_get_file")!(
+      { repositoryId: "repo1", path: "/big.bin" },
+      {},
+    )) as { content: Array<{ text: string }> };
+    const payload = JSON.parse(result.content[0]!.text) as {
+      contentOmitted?: boolean;
+      content?: unknown;
+      size?: number;
+    };
+    expect(payload.contentOmitted).toBe(true);
+    expect(payload.content).toBeUndefined();
+    expect(payload.size).toBe(1_000_001);
+    expect(result.content[0]!.text).not.toContain(huge);
+  });
+
+  it("repo_get_file returns small file content inline", async () => {
+    const { tools } = setup({ path: "/a.ts", content: "hello" });
+    const result = (await tools.get("repo_get_file")!(
+      { repositoryId: "repo1", path: "/a.ts" },
+      {},
+    )) as { content: Array<{ text: string }> };
+    const payload = JSON.parse(result.content[0]!.text) as { content?: string };
+    expect(payload.content).toBe("hello");
+  });
+
+  it("never writes the PAT to the logger", async () => {
+    const lines: string[] = [];
+    const capturing = createLogger({ level: "debug", sink: (line) => lines.push(line) });
+    const { tools } = setup(
+      { path: "/a.ts", content: "x" },
+      { logger: capturing },
+    );
+    const extra = { requestInfo: { headers: { "x-ado-pat": "super-secret-pat" } } };
+    await tools.get("repo_get_file")!({ repositoryId: "repo1", path: "/a.ts" }, extra);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line).not.toContain("super-secret-pat");
+    }
   });
 });
