@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T9 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read). Next: T10 pull requests. Live checklist in `tasks/todo.md`.
+> Progress: **T1–T10 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests). Next: T11 pipelines. Live checklist in `tasks/todo.md`.
 
 ## Overview
 

@@ -43,6 +43,17 @@ const MAX_PATH_LENGTH = 1024;
  */
 const MAX_INLINE_FILE_BYTES = 1_000_000;
 
+/** Pull request states accepted by list/update (ADO `GitPullRequestStatus`). */
+const PR_STATUS = ["active", "abandoned", "completed", "all"] as const;
+
+/**
+ * Normalise a branch name to a full Git ref. Accepts either a short name
+ * (`main`) or an already-qualified ref (`refs/heads/main`, `refs/...`).
+ */
+function toRefName(branch: string): string {
+  return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
+}
+
 export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "repo_list",
@@ -242,6 +253,188 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         { project },
       );
       return asText(commit);
+    },
+  );
+}
+
+/**
+ * Pull request tools, part of the repositories domain.
+ * Endpoints (Azure DevOps Server, api-version configurable):
+ *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullrequests             (list)
+ *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}        (get)
+ *   POST  {project?}/_apis/git/repositories/{repositoryId}/pullrequests             (create)
+ *   PATCH {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}        (update)
+ *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullRequests/{id}/threads (list threads)
+ *   POST  {project?}/_apis/git/repositories/{repositoryId}/pullRequests/{id}/threads (add comment thread)
+ * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests (api-version 7.1)
+ */
+export function configurePullRequestTools(server: McpServer, deps: ToolDeps): void {
+  server.registerTool(
+    "pr_list",
+    {
+      description: "List pull requests in a repository, optionally filtered by status or target branch.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+        status: z
+          .enum(PR_STATUS)
+          .optional()
+          .describe("Filter by status: active (default), abandoned, completed, or all"),
+        targetBranch: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filter by target branch (short name or full ref)"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .max(deps.config.maxResults)
+          .optional()
+          .describe("Maximum number of pull requests"),
+      },
+    },
+    async ({ repositoryId, project, status, targetBranch, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top, deps.config.maxResults);
+      const query: Record<string, QueryValue> = {
+        "searchCriteria.status": status,
+        "searchCriteria.targetRefName": targetBranch ? toRefName(targetBranch) : undefined,
+        $top: cap,
+      };
+      const result = await client.get<{ value?: unknown[] }>(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
+        { project, query },
+      );
+      return asText((result.value ?? []).slice(0, cap));
+    },
+  );
+
+  server.registerTool(
+    "pr_get",
+    {
+      description: "Get a single pull request by id.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        pullRequestId: z.number().int().positive().describe("Pull request id"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+      },
+    },
+    async ({ repositoryId, pullRequestId, project }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const pr = await client.get(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
+        { project },
+      );
+      return asText(pr);
+    },
+  );
+
+  server.registerTool(
+    "pr_list_threads",
+    {
+      description: "List comment threads on a pull request.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        pullRequestId: z.number().int().positive().describe("Pull request id"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+      },
+    },
+    async ({ repositoryId, pullRequestId, project }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const result = await client.get<{ value?: unknown[] }>(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads`,
+        { project },
+      );
+      return asText(result.value ?? []);
+    },
+  );
+
+  server.registerTool(
+    "pr_create",
+    {
+      description: "Create a pull request from a source branch into a target branch.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        sourceBranch: z.string().min(1).describe("Source branch (short name or full ref)"),
+        targetBranch: z.string().min(1).describe("Target branch (short name or full ref)"),
+        title: z.string().min(1).describe("Pull request title"),
+        description: z.string().optional().describe("Pull request description"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+      },
+    },
+    async ({ repositoryId, sourceBranch, targetBranch, title, description, project }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const pr = await client.post(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
+        {
+          sourceRefName: toRefName(sourceBranch),
+          targetRefName: toRefName(targetBranch),
+          title,
+          description,
+        },
+        { project },
+      );
+      return asText(pr);
+    },
+  );
+
+  server.registerTool(
+    "pr_add_comment",
+    {
+      description: "Add a comment to a pull request by creating a new comment thread.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        pullRequestId: z.number().int().positive().describe("Pull request id"),
+        content: z.string().min(1).describe("Comment text"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+      },
+    },
+    async ({ repositoryId, pullRequestId, content, project }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const thread = await client.post(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads`,
+        { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
+        { project },
+      );
+      return asText(thread);
+    },
+  );
+
+  server.registerTool(
+    "pr_update_status",
+    {
+      description:
+        "Update a pull request's status. Use 'completed' to merge (requires the source merge-commit id), 'abandoned' to close, or 'active' to reactivate.",
+      inputSchema: {
+        repositoryId: z.string().min(1).describe("Repository id or name"),
+        pullRequestId: z.number().int().positive().describe("Pull request id"),
+        status: z
+          .enum(["active", "abandoned", "completed"])
+          .describe("New status: active, abandoned, or completed"),
+        mergeCommitId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Latest source commit id; required by the server to complete a PR"),
+        project: z.string().min(1).optional().describe("Project name or ID"),
+      },
+    },
+    async ({ repositoryId, pullRequestId, status, mergeCommitId, project }, extra) => {
+      if (status === "completed" && !mergeCommitId) {
+        throw new Error(
+          "Completing a pull request requires 'mergeCommitId' (the current source branch tip commit id).",
+        );
+      }
+      const client = deps.clientFor(patFromExtra(extra));
+      const body: Record<string, unknown> = { status };
+      if (mergeCommitId) body["lastMergeSourceCommit"] = { commitId: mergeCommitId };
+      const pr = await client.patch(
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
+        body,
+        { project },
+      );
+      return asText(pr);
     },
   );
 }
