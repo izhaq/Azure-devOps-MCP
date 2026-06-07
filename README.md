@@ -7,9 +7,10 @@ other MCP client) over the official Azure DevOps REST APIs.
 Built for **fully offline / air-gapped** environments: the only outbound network
 destination is your configured on-prem Azure DevOps Server. No internet, no telemetry.
 
-> Status: **in active development.** Foundation, both transports, and the first three
-> tool domains (`core`, `work-items`, `repositories` read) are implemented. Remaining
-> domains and packaging are in progress — see [Roadmap](#roadmap).
+> Status: **in active development.** Foundation, both transports, and the `core`,
+> `work-items`, `repositories` (Git read + pull requests), and `pipelines` (builds) tool
+> domains are implemented. Remaining domains and packaging are in progress — see
+> [Roadmap](#roadmap).
 
 ## Features
 
@@ -115,8 +116,24 @@ Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (defa
 - `repo_list_commits` — list commits
 - `repo_get_commit` — get a commit
 
+### `repositories` (pull requests) ✅
+- `pr_list` — list pull requests (filter by status / target branch)
+- `pr_get` — get a pull request by id
+- `pr_list_threads` — list a PR's comment threads
+- `pr_create` — create a pull request
+- `pr_add_comment` — add a comment (new thread)
+- `pr_update_status` — set status `active` / `abandoned` / `completed`
+
+### `pipelines` (builds) ✅
+- `pipeline_list` — list pipeline definitions
+- `pipeline_get` — get a pipeline (optional revision)
+- `build_list` — list builds (filter by definition / branch / status / result)
+- `build_get` — get a build by id
+- `build_queue` — queue a build (optional source branch + template parameters)
+- `build_get_logs` — list a build's logs, or fetch one log's content lines
+
 ### Planned
-- `repositories` pull requests (`pr_*`), `pipelines`, `work` (boards/iterations), `wiki`, `test-plans`.
+- `work` (boards/iterations), `wiki`, `test-plans`.
 
 ## Security
 
@@ -147,9 +164,9 @@ of agent skills under `.cursor/`. See [`AGENTS.md`](AGENTS.md), [`SPEC.md`](SPEC
 Tracked in [`tasks/todo.md`](tasks/todo.md).
 
 - ✅ Foundation, config/logging, REST client, MCP server + domains, stdio transport
-- ✅ `core`, `work-items`, `repositories` (Git read) domains
 - ✅ Streamable HTTP transport (security + per-request PAT)
-- ⬜ Pull requests, `pipelines`, `work`, `wiki`, `test-plans` domains
+- ✅ `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds) domains
+- ⬜ `work`, `wiki`, `test-plans` domains
 - ⬜ npm packaging, Dockerfile + hosted docs, cross-platform CI
 
 ## License
