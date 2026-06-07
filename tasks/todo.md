@@ -2,7 +2,7 @@
 
 Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Respect dependency order; stop at checkpoints for review.
 
-**Progress: T1–T9 done** (foundation, stdio + Streamable HTTP transports, `core` + `work-items` + `repositories` read). **Next: T10 (pull requests).** Checkpoints B & C (real on-prem call) still pending human verification.
+**Progress: T1–T10 done** (foundation, stdio + Streamable HTTP transports, `core` + `work-items` + `repositories` read + pull requests). **Next: T11 (pipelines).** Checkpoints B & C (real on-prem call) still pending human verification.
 
 ## Phase 1 — Foundation
 - [x] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
@@ -23,7 +23,7 @@ Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Res
 ## Phase 4 — Domain Expansion (parallelizable after T6)
 - [x] **T8** `work-items` (query/get/create/update/comment/types) — *M, deps: T6*
 - [x] **T9** `repositories` Git read (list/branches/file/items/commits/commit) — *M, deps: T6*
-- [ ] **T10** Pull requests (list/get/create/comment/status/threads) — *M, deps: T9*
+- [x] **T10** Pull requests (list/get/create/comment/status/threads) — *M, deps: T9*
 - [ ] **T11** `pipelines` (pipelines + builds + queue + logs) — *M, deps: T6*
 - [ ] **T12** `work` boards/iterations (iterations/backlog/capacity) — *S, deps: T6*
 - [ ] **T13** `wiki` (list/get-page/create-or-update-page) — *S, deps: T6*
