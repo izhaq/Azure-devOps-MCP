@@ -11,6 +11,28 @@ Guidance for AI coding agents working in this repository.
 - Auth: **Personal Access Token (PAT)** via Basic auth (empty username + PAT).
 - Stack: TypeScript / Node.js.
 
+## Current status
+
+**In progress (T1–T9 done).** Implemented: project scaffolding, config + logger (PAT redaction),
+REST client (`src/azure/`), per-request context, MCP server + domain orchestrator, **stdio** and
+**Streamable HTTP** transports, and the `core`, `work-items`, and `repositories` (Git **read**) tool
+domains. Next up: T10 pull requests, then `pipelines` / `work` / `wiki` / `test-plans`, then
+packaging/docs/CI. The live checklist is `tasks/todo.md`; spec is `SPEC.md`; plan is `tasks/plan.md`.
+
+When adding a domain, follow the existing pattern: `src/tools/<domain>.ts` exports
+`configure<Domain>Tools(server, deps)`, register it in `src/tools.ts` behind its `Domain`,
+read the per-request PAT via `deps.clientFor(patFromExtra(extra))`, validate inputs with `zod`,
+and add mocked-fetch unit tests under `tests/unit/`.
+
+### Quickstart
+
+```bash
+npm ci && npm run build
+node dist/index.js --stdio                       # local
+node dist/index.js --http --port 3000            # hosted
+npm run typecheck && npm run lint && npm test    # verify
+```
+
 ## Engineering Workflow (agent-skills)
 
 This repo vendors the [agent-skills](https://github.com/addyosmani/agent-skills) pack under `.cursor/`. Skills auto-activate from context; you can also invoke them by name. **Always check for an applicable skill before implementing.**

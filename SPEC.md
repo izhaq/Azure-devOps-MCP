@@ -1,7 +1,13 @@
 # Spec: Azure DevOps MCP Server (On-Prem)
 
-> Status: **DRAFT — open questions resolved; awaiting final human approval** (Phase 1 / SPECIFY of the spec → plan → tasks → implement workflow).
-> Owner: Dev tooling. Last updated: 2026-05-31.
+> Status: **APPROVED — implementation in progress.** (Phase 1 / SPECIFY of the spec → plan → tasks → implement workflow; build underway.)
+> Owner: Dev tooling. Last updated: 2026-06-07.
+>
+> **Implementation status (see `tasks/todo.md` for the live checklist):**
+> - ✅ Foundation, config/logger, REST client, MCP server + domains + orchestrator, stdio transport
+> - ✅ Streamable HTTP transport (Origin/Host → 403, `X-ADO-PAT` → 401, security headers, body cap, optional direct TLS)
+> - ✅ Domains: `core`, `work-items`, `repositories` (Git **read**)
+> - ⬜ Remaining: `repositories` pull requests (`pr_*`), `pipelines`, `work`, `wiki`, `test-plans`; npm/Docker packaging; docs; CI
 
 ## Objective
 
@@ -102,13 +108,15 @@ Tools are grouped by ADO area. Each tool validates inputs with `zod` and returns
 
 Organized by **domain** (the registration unit). Each tool validates inputs with `zod` and returns structured JSON. Destructive/creating tools are clearly named.
 
-- **`core`**: `core_list_projects`, `core_list_teams`
-- **`work`** (boards/iterations/sprints): `work_list_iterations`, `work_list_backlog`, `work_get_capacity`
-- **`work-items`**: `wit_query` (WIQL), `wit_get`, `wit_create`, `wit_update`, `wit_add_comment`, `wit_list_types`
-- **`repositories`** (Git, incl. pull requests): `repo_list`, `repo_list_branches`, `repo_get_file`, `repo_list_items`, `repo_list_commits`, `repo_get_commit`, `pr_list`, `pr_get`, `pr_create`, `pr_add_comment`, `pr_update_status`, `pr_list_threads`
-- **`pipelines`** (builds): `pipeline_list`, `pipeline_get`, `build_list`, `build_get`, `build_queue`, `build_get_logs`
-- **`wiki`**: `wiki_list`, `wiki_get_page`, `wiki_create_or_update_page`
-- **`test-plans`**: `testplan_list`, `testplan_list_suites`, `testplan_list_cases`
+- ✅ **`core`**: `core_list_projects`, `core_list_teams`
+- ⬜ **`work`** (boards/iterations/sprints): `work_list_iterations`, `work_list_backlog`, `work_get_capacity`
+- ✅ **`work-items`**: `wit_query` (WIQL), `wit_get`, `wit_create`, `wit_update`, `wit_add_comment`, `wit_list_types`
+- **`repositories`** (Git, incl. pull requests):
+  - ✅ Git read: `repo_list`, `repo_list_branches`, `repo_get_file`, `repo_list_items`, `repo_list_commits`, `repo_get_commit`
+  - ⬜ Pull requests: `pr_list`, `pr_get`, `pr_create`, `pr_add_comment`, `pr_update_status`, `pr_list_threads`
+- ⬜ **`pipelines`** (builds): `pipeline_list`, `pipeline_get`, `build_list`, `build_get`, `build_queue`, `build_get_logs`
+- ⬜ **`wiki`**: `wiki_list`, `wiki_get_page`, `wiki_create_or_update_page`
+- ⬜ **`test-plans`**: `testplan_list`, `testplan_list_suites`, `testplan_list_cases`
 
 > Exact tool list is refined in the PLAN phase; this is the v1 commitment. Domains can be selectively enabled via `--domains`/`-d` (default: all).
 

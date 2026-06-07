@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
-> Derived from `SPEC.md`. Status: **DRAFT — awaiting human approval** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> No code is written during planning.
+> Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
+> Progress: **T1–T9 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read). Next: T10 pull requests. Live checklist in `tasks/todo.md`.
 
 ## Overview
 

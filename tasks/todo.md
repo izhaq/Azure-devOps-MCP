@@ -2,6 +2,8 @@
 
 Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Respect dependency order; stop at checkpoints for review.
 
+**Progress: T1–T9 done** (foundation, stdio + Streamable HTTP transports, `core` + `work-items` + `repositories` read). **Next: T10 (pull requests).** Checkpoints B & C (real on-prem call) still pending human verification.
+
 ## Phase 1 — Foundation
 - [x] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
 - [x] **T2** Config + logger (PAT redaction) + version — *M, deps: T1*
