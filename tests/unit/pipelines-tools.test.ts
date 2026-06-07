@@ -121,6 +121,13 @@ describe("configurePipelinesTools (read)", () => {
     expect(calls[0]!.url).toContain("pipelineVersion=3");
   });
 
+  it("pipeline_get omits pipelineVersion from the URL when not provided", async () => {
+    const { calls, tools } = setup({ id: 7 });
+    await tools.get("pipeline_get")!({ project: "Proj", pipelineId: 7 }, {});
+    expect(calls[0]!.url).toContain("/_apis/pipelines/7");
+    expect(calls[0]!.url).not.toContain("pipelineVersion");
+  });
+
   it("build_list applies definition/branch/status/result filters", async () => {
     const { calls, tools } = setup({ value: [{ id: 100 }] });
     await tools.get("build_list")!(
@@ -208,15 +215,26 @@ describe("configurePipelinesTools (write + logs)", () => {
     expect(logs).toHaveLength(2);
   });
 
-  it("build_get_logs fetches a single log's content with a line range", async () => {
-    const { calls, tools } = setup(["line 1", "line 2"]);
-    await tools.get("build_get_logs")!(
-      { project: "Proj", buildId: 100, logId: 7, startLine: 0, endLine: 50 },
-      {},
-    );
+  it("build_get_logs unwraps a single log's content from the ADO { count, value } shape", async () => {
+    const { calls, tools } = setup({ count: 2, value: ["line 1", "line 2"] });
+    const lines = parseResult(
+      await tools.get("build_get_logs")!(
+        { project: "Proj", buildId: 100, logId: 7, startLine: 0, endLine: 50 },
+        {},
+      ),
+    ) as string[];
     const url = calls[0]!.url;
     expect(url).toContain("/_apis/build/builds/100/logs/7");
     expect(url).toContain("startLine=0");
     expect(url).toContain("endLine=50");
+    expect(lines).toEqual(["line 1", "line 2"]);
+  });
+
+  it("build_get_logs accepts a bare string[] log body for back-compat", async () => {
+    const { tools } = setup(["legacy line 1", "legacy line 2"]);
+    const lines = parseResult(
+      await tools.get("build_get_logs")!({ project: "Proj", buildId: 100, logId: 7 }, {}),
+    ) as string[];
+    expect(lines).toEqual(["legacy line 1", "legacy line 2"]);
   });
 });

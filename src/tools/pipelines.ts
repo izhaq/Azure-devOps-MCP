@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asText, toRefName } from "./_shared.js";
 
 /**
  * pipelines domain: Azure Pipelines (definitions) + Builds (runs).
@@ -35,12 +35,22 @@ const BUILD_STATUS = [
 const BUILD_RESULT = ["none", "succeeded", "partiallySucceeded", "failed", "canceled"] as const;
 
 /**
- * Normalise a branch name to a full Git ref. Accepts either a short name
- * (`main`) or an already-qualified ref (`refs/heads/main`). The Build API's
- * `branchName` filter and `sourceBranch` both expect a full ref.
+ * Unwrap build log lines from the ADO JSON response. "Get Build Log" returns
+ * `{ count, value: string[] }` when `Accept: application/json` (api-version 7.1):
+ * https://learn.microsoft.com/en-us/rest/api/azure/devops/build/builds/get-build-log
+ * Some servers may return a bare `string[]`; accept both and always return lines.
  */
-function toRefName(branch: string): string {
-  return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
+function unwrapBuildLogLines(body: unknown): string[] {
+  if (Array.isArray(body)) return body as string[];
+  if (
+    body !== null &&
+    typeof body === "object" &&
+    "value" in body &&
+    Array.isArray((body as { value: unknown }).value)
+  ) {
+    return (body as { value: string[] }).value;
+  }
+  return [];
 }
 
 export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void {
@@ -201,8 +211,18 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
           .positive()
           .optional()
           .describe("Log file id; omit to list the build's logs"),
-        startLine: z.number().int().nonnegative().optional().describe("First line of the log to return"),
-        endLine: z.number().int().nonnegative().optional().describe("Last line of the log to return"),
+        startLine: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("First line of the log to return; only used when logId is set"),
+        endLine: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Last line of the log to return; only used when logId is set"),
       },
     },
     async ({ project, buildId, logId, startLine, endLine }, extra) => {
@@ -214,11 +234,11 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
         );
         return asText(result.value ?? []);
       }
-      const lines = await client.get(`/_apis/build/builds/${buildId}/logs/${logId}`, {
+      const body = await client.get<unknown>(`/_apis/build/builds/${buildId}/logs/${logId}`, {
         project,
         query: { startLine, endLine },
       });
-      return asText(lines);
+      return asText(unwrapBuildLogLines(body));
     },
   );
 }
