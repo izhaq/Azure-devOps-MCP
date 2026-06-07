@@ -154,4 +154,71 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
       return asText(build);
     },
   );
+
+  server.registerTool(
+    "build_queue",
+    {
+      description:
+        "Queue (start) a new build for a pipeline definition. Optionally target a " +
+        "source branch and pass YAML template parameters.",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        definitionId: z.number().int().positive().describe("Pipeline definition id to queue"),
+        sourceBranch: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Source branch to build (short name or full ref); defaults to the pipeline default"),
+        templateParameters: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe("Runtime YAML template parameters (name -> value)"),
+      },
+    },
+    async ({ project, definitionId, sourceBranch, templateParameters }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const body: Record<string, unknown> = { definition: { id: definitionId } };
+      if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
+      if (templateParameters) body["templateParameters"] = templateParameters;
+      const build = await client.post("/_apis/build/builds", body, { project });
+      return asText(build);
+    },
+  );
+
+  server.registerTool(
+    "build_get_logs",
+    {
+      description:
+        "Get build logs. Without logId, returns the list of log files (metadata) for " +
+        "the build so you can pick one. With logId, returns that log's content as lines " +
+        "(optionally a startLine..endLine range).",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        buildId: z.number().int().positive().describe("Build id"),
+        logId: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Log file id; omit to list the build's logs"),
+        startLine: z.number().int().nonnegative().optional().describe("First line of the log to return"),
+        endLine: z.number().int().nonnegative().optional().describe("Last line of the log to return"),
+      },
+    },
+    async ({ project, buildId, logId, startLine, endLine }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      if (logId === undefined) {
+        const result = await client.get<{ value?: unknown[] }>(
+          `/_apis/build/builds/${buildId}/logs`,
+          { project },
+        );
+        return asText(result.value ?? []);
+      }
+      const lines = await client.get(`/_apis/build/builds/${buildId}/logs/${logId}`, {
+        project,
+        query: { startLine, endLine },
+      });
+      return asText(lines);
+    },
+  );
 }

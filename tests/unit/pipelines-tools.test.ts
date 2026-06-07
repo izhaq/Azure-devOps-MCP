@@ -79,12 +79,19 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
-const TOOLS = ["pipeline_list", "pipeline_get", "build_list", "build_get"];
+const TOOLS = [
+  "pipeline_list",
+  "pipeline_get",
+  "build_list",
+  "build_get",
+  "build_queue",
+  "build_get_logs",
+];
 
 describe("configurePipelinesTools (read)", () => {
-  it("registers the pipeline read tools", () => {
+  it("registers all pipeline tools", () => {
     const { tools } = setup();
-    expect(TOOLS.every((name) => tools.has(name))).toBe(true);
+    expect([...tools.keys()].sort()).toEqual([...TOOLS].sort());
   });
 
   it("pipeline_list queries the project-scoped pipelines endpoint", async () => {
@@ -159,5 +166,57 @@ describe("configurePipelinesTools (read)", () => {
     await expect(
       tools.get("build_get")!({ project: "Proj", buildId: 999 }, {}),
     ).rejects.toThrow(/Azure DevOps API error 404: TF400813/);
+  });
+});
+
+describe("configurePipelinesTools (write + logs)", () => {
+  it("build_queue POSTs the definition and normalized source branch", async () => {
+    const { calls, tools } = setup({ id: 100, status: "notStarted" });
+    await tools.get("build_queue")!(
+      {
+        project: "Proj",
+        definitionId: 5,
+        sourceBranch: "feature/x",
+        templateParameters: { env: "dev" },
+      },
+      {},
+    );
+    const call = calls[0]!;
+    expect(call.method).toBe("POST");
+    expect(call.url).toContain("/_apis/build/builds");
+    expect(call.body).toEqual({
+      definition: { id: 5 },
+      sourceBranch: "refs/heads/feature/x",
+      templateParameters: { env: "dev" },
+    });
+  });
+
+  it("build_queue omits optional fields when not provided", async () => {
+    const { calls, tools } = setup({ id: 101 });
+    await tools.get("build_queue")!({ project: "Proj", definitionId: 5 }, {});
+    expect(calls[0]!.body).toEqual({ definition: { id: 5 } });
+  });
+
+  it("build_get_logs lists logs when no logId is given", async () => {
+    const { calls, tools } = setup({ count: 2, value: [{ id: 1 }, { id: 2 }] });
+    const logs = parseResult(
+      await tools.get("build_get_logs")!({ project: "Proj", buildId: 100 }, {}),
+    ) as unknown[];
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.url).toContain("/_apis/build/builds/100/logs");
+    expect(calls[0]!.url).not.toContain("/logs/");
+    expect(logs).toHaveLength(2);
+  });
+
+  it("build_get_logs fetches a single log's content with a line range", async () => {
+    const { calls, tools } = setup(["line 1", "line 2"]);
+    await tools.get("build_get_logs")!(
+      { project: "Proj", buildId: 100, logId: 7, startLine: 0, endLine: 50 },
+      {},
+    );
+    const url = calls[0]!.url;
+    expect(url).toContain("/_apis/build/builds/100/logs/7");
+    expect(url).toContain("startLine=0");
+    expect(url).toContain("endLine=50");
   });
 });
