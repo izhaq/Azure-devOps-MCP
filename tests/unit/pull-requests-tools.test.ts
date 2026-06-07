@@ -120,7 +120,19 @@ describe("configurePullRequestTools", () => {
   it("pr_list_threads lists threads for a pull request", async () => {
     const { calls, tools } = setup({ value: [{ id: 7 }] });
     await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {});
-    expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/pullRequests/42/threads");
+    expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/pullrequests/42/threads");
+  });
+
+  it("pr_list_threads bounds results to maxResults", async () => {
+    const smallConfig: ServerConfig = { ...config, maxResults: 2 };
+    const { tools } = setup(
+      { value: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+      { config: smallConfig },
+    );
+    const threads = parseResult(
+      await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as unknown[];
+    expect(threads).toHaveLength(2);
   });
 
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
@@ -168,7 +180,7 @@ describe("configurePullRequestTools", () => {
     );
     const call = calls[0]!;
     expect(call.method).toBe("POST");
-    expect(call.url).toContain("/_apis/git/repositories/repo1/pullRequests/5/threads");
+    expect(call.url).toContain("/_apis/git/repositories/repo1/pullrequests/5/threads");
     expect(call.body).toEqual({
       comments: [{ parentCommentId: 0, content: "looks good", commentType: "text" }],
     });
@@ -186,21 +198,26 @@ describe("configurePullRequestTools", () => {
     expect(call.body).toEqual({ status: "abandoned" });
   });
 
-  it("pr_update_status rejects completing without a merge commit id", async () => {
+  it("pr_update_status rejects completing without a source commit id (no REST call made)", async () => {
     const { calls, tools } = setup({ pullRequestId: 5 });
     await expect(
       tools.get("pr_update_status")!(
         { repositoryId: "repo1", pullRequestId: 5, status: "completed" },
         {},
       ),
-    ).rejects.toThrow(/requires 'mergeCommitId'/);
+    ).rejects.toThrow(/requires 'lastMergeSourceCommitId'/);
     expect(calls).toHaveLength(0);
   });
 
-  it("pr_update_status includes lastMergeSourceCommit when completing with a merge commit id", async () => {
+  it("pr_update_status includes lastMergeSourceCommit when completing with a source commit id", async () => {
     const { calls, tools } = setup({ pullRequestId: 5, status: "completed" });
     await tools.get("pr_update_status")!(
-      { repositoryId: "repo1", pullRequestId: 5, status: "completed", mergeCommitId: "abc123" },
+      {
+        repositoryId: "repo1",
+        pullRequestId: 5,
+        status: "completed",
+        lastMergeSourceCommitId: "abc123",
+      },
       {},
     );
     expect(calls[0]!.body).toEqual({

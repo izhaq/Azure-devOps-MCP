@@ -264,8 +264,8 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
  *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}        (get)
  *   POST  {project?}/_apis/git/repositories/{repositoryId}/pullrequests             (create)
  *   PATCH {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}        (update)
- *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullRequests/{id}/threads (list threads)
- *   POST  {project?}/_apis/git/repositories/{repositoryId}/pullRequests/{id}/threads (add comment thread)
+ *   GET   {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}/threads (list threads)
+ *   POST  {project?}/_apis/git/repositories/{repositoryId}/pullrequests/{id}/threads (add comment thread)
  * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests (api-version 7.1)
  */
 export function configurePullRequestTools(server: McpServer, deps: ToolDeps): void {
@@ -342,11 +342,15 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     },
     async ({ repositoryId, pullRequestId, project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      // The List Threads endpoint has no $top, so it returns the whole set in
+      // one response. Bound the RESULT to maxResults for consistency with the
+      // other list tools so a noisy PR can't blow up the payload.
+      const cap = boundLimit(undefined, deps.config.maxResults);
       const result = await client.get<{ value?: unknown[] }>(
-        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads`,
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project },
       );
-      return asText(result.value ?? []);
+      return asText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -393,7 +397,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     async ({ repositoryId, pullRequestId, content, project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const thread = await client.post(
-        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/threads`,
+        `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project },
       );
@@ -405,30 +409,38 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     "pr_update_status",
     {
       description:
-        "Update a pull request's status. Use 'completed' to merge (requires the source merge-commit id), 'abandoned' to close, or 'active' to reactivate.",
+        "Update a pull request's status. Use 'completed' to merge (requires the current " +
+        "source branch tip commit id), 'abandoned' to close, or 'active' to reactivate. " +
+        "Completing sends only status + lastMergeSourceCommit (no completionOptions), so " +
+        "ADO defaults apply: no squash, the source branch is not deleted, and optional " +
+        "policies are not bypassed.",
       inputSchema: {
         repositoryId: z.string().min(1).describe("Repository id or name"),
         pullRequestId: z.number().int().positive().describe("Pull request id"),
         status: z
           .enum(["active", "abandoned", "completed"])
           .describe("New status: active, abandoned, or completed"),
-        mergeCommitId: z
+        lastMergeSourceCommitId: z
           .string()
           .min(1)
           .optional()
-          .describe("Latest source commit id; required by the server to complete a PR"),
+          .describe(
+            "Current source branch tip commit id (NOT a merge commit); required by the server to complete a PR",
+          ),
         project: z.string().min(1).optional().describe("Project name or ID"),
       },
     },
-    async ({ repositoryId, pullRequestId, status, mergeCommitId, project }, extra) => {
-      if (status === "completed" && !mergeCommitId) {
+    async ({ repositoryId, pullRequestId, status, lastMergeSourceCommitId, project }, extra) => {
+      if (status === "completed" && !lastMergeSourceCommitId) {
         throw new Error(
-          "Completing a pull request requires 'mergeCommitId' (the current source branch tip commit id).",
+          "Completing a pull request requires 'lastMergeSourceCommitId' (the current source branch tip commit id).",
         );
       }
       const client = deps.clientFor(patFromExtra(extra));
       const body: Record<string, unknown> = { status };
-      if (mergeCommitId) body["lastMergeSourceCommit"] = { commitId: mergeCommitId };
+      if (lastMergeSourceCommitId) {
+        body["lastMergeSourceCommit"] = { commitId: lastMergeSourceCommitId };
+      }
       const pr = await client.patch(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         body,
