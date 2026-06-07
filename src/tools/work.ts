@@ -1,0 +1,99 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { type ToolDeps, patFromExtra } from "../context.js";
+import { boundLimit, type QueryValue } from "../azure/client.js";
+import { asText } from "./_shared.js";
+
+/**
+ * work domain: team boards/iterations (sprints), backlog levels, capacity.
+ * Endpoints (Azure DevOps Server, api-version configurable). All are
+ * team-scoped; `team` is optional and defaults to the project's default team.
+ *   GET {project}/{team?}/_apis/work/teamsettings/iterations                          (work_list_iterations)
+ *   GET {project}/{team?}/_apis/work/backlogs                                         (work_list_backlog)
+ *   GET {project}/{team?}/_apis/work/teamsettings/iterations/{iterationId}/capacities (work_get_capacity)
+ * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/work (api-version 7.1)
+ */
+
+/**
+ * Build a work-area request path, optionally scoped to a team. The team
+ * segment precedes `_apis`; when omitted, Azure DevOps uses the project's
+ * default team.
+ */
+function workPath(team: string | undefined, resource: string): string {
+  const teamSegment = team ? `/${encodeURIComponent(team)}` : "";
+  return `${teamSegment}/_apis/work/${resource}`;
+}
+
+export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
+  server.registerTool(
+    "work_list_iterations",
+    {
+      description: "List a team's iterations (sprints), optionally only the current one.",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
+        timeframe: z
+          .literal("current")
+          .optional()
+          .describe("Only 'current' is supported; omit to list all iterations"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .max(deps.config.maxResults)
+          .optional()
+          .describe("Maximum number of iterations"),
+      },
+    },
+    async ({ project, team, timeframe, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top, deps.config.maxResults);
+      const query: Record<string, QueryValue> = { $timeframe: timeframe };
+      const result = await client.get<{ value?: unknown[] }>(
+        workPath(team, "teamsettings/iterations"),
+        { project, query },
+      );
+      return asText((result.value ?? []).slice(0, cap));
+    },
+  );
+
+  server.registerTool(
+    "work_list_backlog",
+    {
+      description:
+        "List a team's backlog levels (e.g. Epics, Features, Stories) and their " +
+        "configuration. To list the work items inside a backlog, use wit_query (WIQL).",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
+      },
+    },
+    async ({ project, team }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
+        project,
+      });
+      return asText((result.value ?? []).slice(0, deps.config.maxResults));
+    },
+  );
+
+  server.registerTool(
+    "work_get_capacity",
+    {
+      description: "Get a team's capacity (per-member capacity and days off) for an iteration.",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        iterationId: z.string().min(1).describe("Iteration id (GUID)"),
+        team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
+      },
+    },
+    async ({ project, iterationId, team }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const capacity = await client.get(
+        workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
+        { project },
+      );
+      return asText(capacity);
+    },
+  );
+}
