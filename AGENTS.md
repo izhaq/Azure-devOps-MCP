@@ -13,11 +13,12 @@ Guidance for AI coding agents working in this repository.
 
 ## Current status
 
-**In progress (T1–T9 done).** Implemented: project scaffolding, config + logger (PAT redaction),
+**In progress (T1–T11 done).** Implemented: project scaffolding, config + logger (PAT redaction),
 REST client (`src/azure/`), per-request context, MCP server + domain orchestrator, **stdio** and
-**Streamable HTTP** transports, and the `core`, `work-items`, and `repositories` (Git **read**) tool
-domains. Next up: T10 pull requests, then `pipelines` / `work` / `wiki` / `test-plans`, then
-packaging/docs/CI. The live checklist is `tasks/todo.md`; spec is `SPEC.md`; plan is `tasks/plan.md`.
+**Streamable HTTP** transports, and the `core`, `work-items`, `repositories` (Git **read** + pull
+requests), and `pipelines` (builds) tool domains. Next up: T12 `work` (boards/iterations), then
+`wiki` / `test-plans`, then packaging/docs/CI. The live checklist is `tasks/todo.md`; spec is
+`SPEC.md`; plan is `tasks/plan.md`.
 
 When adding a domain, follow the existing pattern: `src/tools/<domain>.ts` exports
 `configure<Domain>Tools(server, deps)`, register it in `src/tools.ts` behind its `Domain`,
