@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asText, toRefName } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -45,14 +45,6 @@ const MAX_INLINE_FILE_BYTES = 1_000_000;
 
 /** Pull request states accepted by list/update (ADO `GitPullRequestStatus`). */
 const PR_STATUS = ["active", "abandoned", "completed", "all"] as const;
-
-/**
- * Normalise a branch name to a full Git ref. Accepts either a short name
- * (`main`) or an already-qualified ref (`refs/heads/main`, `refs/...`).
- */
-function toRefName(branch: string): string {
-  return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
-}
 
 export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
