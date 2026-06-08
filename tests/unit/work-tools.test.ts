@@ -77,7 +77,7 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
-const TOOLS = ["work_list_iterations", "work_list_backlog", "work_get_capacity"];
+const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity"];
 
 describe("configureWorkTools", () => {
   it("registers all work tools", () => {
@@ -116,23 +116,64 @@ describe("configureWorkTools", () => {
     expect(iterations).toHaveLength(2);
   });
 
-  it("work_list_backlog targets the team-scoped backlogs endpoint", async () => {
+  it("work_list_iterations bounds results to a smaller caller-supplied top", async () => {
+    const { tools } = setup({ value: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+    const iterations = parseResult(
+      await tools.get("work_list_iterations")!({ project: "Proj", top: 1 }, {}),
+    ) as unknown[];
+    expect(iterations).toHaveLength(1);
+  });
+
+  it("work_list_backlog_levels targets the team-scoped backlogs endpoint", async () => {
     const { calls, tools } = setup({ value: [{ id: "Microsoft.EpicCategory" }] });
     const levels = parseResult(
-      await tools.get("work_list_backlog")!({ project: "Proj", team: "Team A" }, {}),
+      await tools.get("work_list_backlog_levels")!({ project: "Proj", team: "Team A" }, {}),
     ) as unknown[];
     expect(calls[0]!.url).toContain("/DefaultCollection/Proj/Team%20A/_apis/work/backlogs");
     expect(levels).toHaveLength(1);
   });
 
-  it("work_get_capacity targets the iteration capacities endpoint", async () => {
-    const { calls, tools } = setup({ teamMembers: [], totalCapacityPerDay: 0 });
+  it("work_list_backlog_levels omits the team segment when no team is given", async () => {
+    const { calls, tools } = setup({ value: [{ id: "Microsoft.EpicCategory" }] });
+    await tools.get("work_list_backlog_levels")!({ project: "Proj" }, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/work/backlogs");
+  });
+
+  it("work_list_backlog_levels bounds results to a caller-supplied top", async () => {
+    const { tools } = setup({ value: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+    const levels = parseResult(
+      await tools.get("work_list_backlog_levels")!({ project: "Proj", top: 2 }, {}),
+    ) as unknown[];
+    expect(levels).toHaveLength(2);
+  });
+
+  it("work_get_capacity targets the iteration capacities endpoint and returns the full object", async () => {
+    const capacity = {
+      teamMembers: [{ teamMember: { displayName: "Dev" }, activities: [{ capacityPerDay: 6 }] }],
+      totalCapacityPerDay: 6,
+      totalDaysOff: 0,
+    };
+    const { calls, tools } = setup(capacity);
+    const result = parseResult(
+      await tools.get("work_get_capacity")!(
+        { project: "Proj", team: "Team A", iterationId: "f8b1a0de-1234-4abc-9def-0123456789ab" },
+        {},
+      ),
+    );
+    expect(calls[0]!.url).toContain(
+      "/DefaultCollection/Proj/Team%20A/_apis/work/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
+    );
+    expect(result).toEqual(capacity);
+  });
+
+  it("work_get_capacity omits the team segment when no team is given", async () => {
+    const { calls, tools } = setup({ teamMembers: [], totalCapacityPerDay: 0, totalDaysOff: 0 });
     await tools.get("work_get_capacity")!(
-      { project: "Proj", team: "Team A", iterationId: "abc-123" },
+      { project: "Proj", iterationId: "f8b1a0de-1234-4abc-9def-0123456789ab" },
       {},
     );
     expect(calls[0]!.url).toContain(
-      "/DefaultCollection/Proj/Team%20A/_apis/work/teamsettings/iterations/abc-123/capacities",
+      "/DefaultCollection/Proj/_apis/work/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
     );
   });
 

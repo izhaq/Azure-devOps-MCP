@@ -134,7 +134,7 @@ Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (defa
 
 ### `work` (boards/iterations) ✅
 - `work_list_iterations` — list a team's iterations (sprints)
-- `work_list_backlog` — list a team's backlog levels
+- `work_list_backlog_levels` — list a team's backlog levels
 - `work_get_capacity` — get a team's capacity for an iteration
 
 ### Planned

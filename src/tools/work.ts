@@ -9,7 +9,7 @@ import { asText } from "./_shared.js";
  * Endpoints (Azure DevOps Server, api-version configurable). All are
  * team-scoped; `team` is optional and defaults to the project's default team.
  *   GET {project}/{team?}/_apis/work/teamsettings/iterations                          (work_list_iterations)
- *   GET {project}/{team?}/_apis/work/backlogs                                         (work_list_backlog)
+ *   GET {project}/{team?}/_apis/work/backlogs                                         (work_list_backlog_levels)
  *   GET {project}/{team?}/_apis/work/teamsettings/iterations/{iterationId}/capacities (work_get_capacity)
  * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/work (api-version 7.1)
  */
@@ -58,7 +58,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
   );
 
   server.registerTool(
-    "work_list_backlog",
+    "work_list_backlog_levels",
     {
       description:
         "List a team's backlog levels (e.g. Epics, Features, Stories) and their " +
@@ -66,14 +66,22 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .max(deps.config.maxResults)
+          .optional()
+          .describe("Maximum number of backlog levels"),
       },
     },
-    async ({ project, team }, extra) => {
+    async ({ project, team, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
         project,
       });
-      return asText((result.value ?? []).slice(0, deps.config.maxResults));
+      return asText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -83,7 +91,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       description: "Get a team's capacity (per-member capacity and days off) for an iteration.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
-        iterationId: z.string().min(1).describe("Iteration id (GUID)"),
+        iterationId: z.string().uuid().describe("Iteration id (GUID)"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
       },
     },

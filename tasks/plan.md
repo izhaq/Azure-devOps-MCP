@@ -170,7 +170,7 @@ Build foundation bottom-up; each task leaves the system green.
 **Dependencies:** T6 · **Files:** `src/tools/pipelines.ts`, test · **Scope:** M
 
 #### Task 12: `work` domain (boards/iterations)
-**Acceptance:** `work_list_iterations`, `work_list_backlog`, `work_get_capacity`.
+**Acceptance:** `work_list_iterations`, `work_list_backlog_levels`, `work_get_capacity`.
 **Verify:** unit tests; manual iteration list.
 **Dependencies:** T6 · **Files:** `src/tools/work.ts`, test · **Scope:** S
 
