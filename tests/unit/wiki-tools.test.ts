@@ -144,3 +144,36 @@ describe("configureWikiTools (read)", () => {
     ).rejects.toThrow(/Azure DevOps API error 404: TF401174/);
   });
 });
+
+describe("configureWikiTools (write)", () => {
+  it("registers the create-or-update tool", () => {
+    const { tools } = setup();
+    expect(tools.has("wiki_create_or_update_page")).toBe(true);
+  });
+
+  it("creates a page with a PUT body and no If-Match when version is omitted", async () => {
+    const { calls, tools } = setup({ path: "/New", content: "hi" }, { etag: '"v1"' });
+    const result = parseResult(
+      await tools.get("wiki_create_or_update_page")!(
+        { project: "Proj", wikiIdentifier: "MyWiki", path: "/New", content: "hi" },
+        {},
+      ),
+    ) as { page: unknown; eTag: string };
+    expect(calls[0]!.method).toBe("PUT");
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wiki/wikis/MyWiki/pages");
+    expect(calls[0]!.url).toContain("path=%2FNew");
+    expect(calls[0]!.body).toEqual({ content: "hi" });
+    expect(calls[0]!.ifMatch).toBeUndefined();
+    expect(result.eTag).toBe('"v1"');
+  });
+
+  it("edits a page by sending the version as the If-Match header", async () => {
+    const { calls, tools } = setup({ path: "/Home", content: "new" }, { etag: '"v2"' });
+    await tools.get("wiki_create_or_update_page")!(
+      { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "new", version: '"v1"' },
+      {},
+    );
+    expect(calls[0]!.ifMatch).toBe('"v1"');
+    expect(calls[0]!.body).toEqual({ content: "new" });
+  });
+});

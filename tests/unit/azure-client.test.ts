@@ -159,4 +159,36 @@ describe("AzureDevOpsClient", () => {
     expect(calls[0]!.url).toContain("api-version=7.1-preview.3");
     expect(calls[0]!.url).not.toContain("api-version=7.1&");
   });
+
+  it("requestWithEtag returns the parsed body and the response ETag", async () => {
+    const { impl } = mockFetch([json({ id: 1 }, { headers: { etag: '"v1"' } })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const { data, etag } = await client.requestWithEtag<{ id: number }>("GET", "/_apis/wiki/wikis/W/pages");
+    expect(data).toEqual({ id: 1 });
+    expect(etag).toBe('"v1"');
+  });
+
+  it("requestWithEtag returns undefined when no ETag is present", async () => {
+    const { impl } = mockFetch([json({ id: 1 })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const { etag } = await client.requestWithEtag("GET", "/_apis/wiki/wikis/W/pages");
+    expect(etag).toBeUndefined();
+  });
+
+  it("forwards extra request headers", async () => {
+    const { impl, calls } = mockFetch([json({ id: 1 })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    await client.requestWithEtag("PUT", "/_apis/wiki/wikis/W/pages", { content: "x" }, {
+      headers: { "If-Match": '"v1"' },
+    });
+    const headers = calls[0]!.init?.headers as Record<string, string>;
+    expect(headers["If-Match"]).toBe('"v1"');
+  });
+
+  it("never lets caller headers override Authorization", async () => {
+    const { impl, calls } = mockFetch([json({ id: 1 })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    await client.get("/_apis/projects", { headers: { Authorization: "Basic HACK" } });
+    expect(authOf(calls[0]!)).toBe("Basic OmFiYw==");
+  });
 });

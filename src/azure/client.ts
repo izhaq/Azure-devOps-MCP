@@ -39,6 +39,11 @@ export interface RequestOptions {
    * "Get All Teams" requires `7.1-preview.3`).
    */
   apiVersion?: string;
+  /**
+   * Extra request headers (e.g. `If-Match` for wiki page edits). Cannot
+   * override `Authorization` or `Accept`, which the client always controls.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -164,6 +169,7 @@ export class AzureDevOpsClient {
   ): Promise<{ body: unknown; headers: Headers }> {
     const url = this.buildUrl(path, options);
     const headers: Record<string, string> = {
+      ...options.headers,
       Authorization: buildBasicAuthHeader(this.opts.pat),
       Accept: "application/json",
     };

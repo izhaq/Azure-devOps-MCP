@@ -82,4 +82,40 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
       return asText({ page: data, eTag: etag });
     },
   );
+
+  server.registerTool(
+    "wiki_create_or_update_page",
+    {
+      description:
+        "Create or edit a wiki page at a path. Omit `version` to create a new page; " +
+        "to edit an existing page, pass the `eTag` returned by wiki_get_page as `version` " +
+        "(Azure DevOps requires it to confirm you are editing the current revision). " +
+        "Returns the saved page and its new `eTag`.",
+      inputSchema: {
+        project: z.string().min(1).describe("Project name or ID"),
+        wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
+        path: z.string().min(1).max(MAX_PATH_LENGTH).describe("Page path, e.g. /Home or /Docs/Setup"),
+        content: z.string().describe("Markdown content for the page"),
+        version: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Current page version (the `eTag` from wiki_get_page); required to edit, omit to create"),
+      },
+    },
+    async ({ project, wikiIdentifier, path, content, version }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const { data, etag } = await client.requestWithEtag<Record<string, unknown>>(
+        "PUT",
+        `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
+        { content },
+        {
+          project,
+          query: { path },
+          headers: version ? { "If-Match": version } : undefined,
+        },
+      );
+      return asText({ page: data, eTag: etag });
+    },
+  );
 }
