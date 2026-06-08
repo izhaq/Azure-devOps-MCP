@@ -8,9 +8,9 @@ Built for **fully offline / air-gapped** environments: the only outbound network
 destination is your configured on-prem Azure DevOps Server. No internet, no telemetry.
 
 > Status: **in active development.** Foundation, both transports, and the `core`,
-> `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), and
-> `work` (boards/iterations) tool domains are implemented. Remaining domains and
-> packaging are in progress — see [Roadmap](#roadmap).
+> `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds),
+> `work` (boards/iterations), and `wiki` tool domains are implemented. Remaining
+> domains and packaging are in progress — see [Roadmap](#roadmap).
 
 ## Features
 
@@ -137,8 +137,13 @@ Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (defa
 - `work_list_backlog_levels` — list a team's backlog levels
 - `work_get_capacity` — get a team's capacity for an iteration
 
+### `wiki` ✅
+- `wiki_list` — list a project's wikis
+- `wiki_get_page` — get a page by path; returns its content and version (`eTag`)
+- `wiki_create_or_update_page` — create a page (omit `version`) or edit it (pass the `eTag` from `wiki_get_page`)
+
 ### Planned
-- `wiki`, `test-plans`.
+- `test-plans`.
 
 ## Security
 
@@ -170,8 +175,8 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 
 - ✅ Foundation, config/logging, REST client, MCP server + domains, stdio transport
 - ✅ Streamable HTTP transport (security + per-request PAT)
-- ✅ `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations) domains
-- ⬜ `wiki`, `test-plans` domains
+- ✅ `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki` domains
+- ⬜ `test-plans` domain
 - ⬜ npm packaging, Dockerfile + hosted docs, cross-platform CI
 
 ## License
