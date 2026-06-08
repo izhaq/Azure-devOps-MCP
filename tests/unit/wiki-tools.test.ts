@@ -130,6 +130,29 @@ describe("configureWikiTools (read)", () => {
     expect(url).toContain("recursionLevel=oneLevel");
   });
 
+  it("url-encodes a wiki identifier that contains spaces", async () => {
+    const { calls, tools } = setup({ path: "/Home" }, { etag: '"e"' });
+    await tools.get("wiki_get_page")!(
+      { project: "Proj", wikiIdentifier: "My Wiki", path: "/Home" },
+      {},
+    );
+    expect(calls[0]!.url).toContain("/_apis/wiki/wikis/My%20Wiki/pages");
+  });
+
+  it("omits content and reports size when the page exceeds the inline limit", async () => {
+    const huge = "x".repeat(1_000_001);
+    const { tools } = setup({ path: "/Big", content: huge, id: 7 }, { etag: '"e"' });
+    const result = parseResult(
+      await tools.get("wiki_get_page")!({ project: "Proj", wikiIdentifier: "MyWiki", path: "/Big" }, {}),
+    ) as { page: Record<string, unknown>; eTag: string; message: string };
+    expect(result.page.content).toBeUndefined();
+    expect(result.page.contentOmitted).toBe(true);
+    expect(result.page.id).toBe(7);
+    expect(typeof result.page.size).toBe("number");
+    expect(result.message).toMatch(/exceeds the 1000000-byte inline limit/);
+    expect(result.eTag).toBe('"e"');
+  });
+
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
     const { calls, tools } = setup({ value: [] });
     const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };
@@ -167,13 +190,39 @@ describe("configureWikiTools (write)", () => {
     expect(result.eTag).toBe('"v1"');
   });
 
-  it("edits a page by sending the version as the If-Match header", async () => {
+  it("edits a page by sending the eTag as the If-Match header", async () => {
     const { calls, tools } = setup({ path: "/Home", content: "new" }, { etag: '"v2"' });
     await tools.get("wiki_create_or_update_page")!(
-      { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "new", version: '"v1"' },
+      { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "new", eTag: '"v1"' },
       {},
     );
     expect(calls[0]!.ifMatch).toBe('"v1"');
     expect(calls[0]!.body).toEqual({ content: "new" });
+  });
+
+  it("surfaces a 412 when editing with a stale eTag", async () => {
+    const { tools } = setup(
+      { message: "VS402567: The version of the page does not match" },
+      { status: 412 },
+    );
+    await expect(
+      tools.get("wiki_create_or_update_page")!(
+        { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "x", eTag: '"stale"' },
+        {},
+      ),
+    ).rejects.toThrow(/Azure DevOps API error 412/);
+  });
+
+  it("surfaces a conflict when creating over an existing page", async () => {
+    const { tools } = setup(
+      { message: "VS402097: The page already exists" },
+      { status: 409 },
+    );
+    await expect(
+      tools.get("wiki_create_or_update_page")!(
+        { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "x" },
+        {},
+      ),
+    ).rejects.toThrow(/Azure DevOps API error 409/);
   });
 });

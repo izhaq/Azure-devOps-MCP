@@ -191,4 +191,12 @@ describe("AzureDevOpsClient", () => {
     await client.get("/_apis/projects", { headers: { Authorization: "Basic HACK" } });
     expect(authOf(calls[0]!)).toBe("Basic OmFiYw==");
   });
+
+  it("never lets caller headers override Accept", async () => {
+    const { impl, calls } = mockFetch([json({ id: 1 })]);
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    await client.get("/_apis/projects", { headers: { Accept: "text/html" } });
+    const headers = calls[0]!.init?.headers as Record<string, string>;
+    expect(headers["Accept"]).toBe("application/json");
+  });
 });

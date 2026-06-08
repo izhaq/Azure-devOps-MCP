@@ -20,7 +20,16 @@ import { asText } from "./_shared.js";
 const MAX_PATH_LENGTH = 1024;
 
 /** Recursion levels for fetching a page's subtree (ADO `VersionControlRecursionType`). */
-const RECURSION = ["none", "oneLevel", "full"] as const;
+const RECURSION = ["none", "oneLevel", "oneLevelPlusNestedEmptyFolders", "full"] as const;
+
+/**
+ * Largest serialized page (in bytes) returned inline by `wiki_get_page`. The
+ * page — including its `content` and any `subPages` from `recursionLevel: full`
+ * — is delivered as raw text inside the JSON result, so an unbounded tree would
+ * bloat memory (via JSON.stringify) and the response. When exceeded we drop the
+ * page's `content` and note it; mirrors `repo_get_file`'s inline-size guard.
+ */
+const MAX_INLINE_PAGE_BYTES = 1_000_000;
 
 export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -51,7 +60,8 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     {
       description:
         "Get a wiki page by path. Returns the page and its version as `eTag`; pass " +
-        "that `eTag` to wiki_create_or_update_page to edit the page.",
+        "that `eTag` to wiki_create_or_update_page to edit the page. Pages larger than " +
+        `${MAX_INLINE_PAGE_BYTES} bytes have their content omitted (metadata only).`,
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
@@ -63,7 +73,7 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
         recursionLevel: z
           .enum(RECURSION)
           .optional()
-          .describe("Include sub-pages: none (default), oneLevel, or full"),
+          .describe("Include sub-pages: none (default), oneLevel, oneLevelPlusNestedEmptyFolders, or full"),
       },
     },
     async ({ project, wikiIdentifier, path, includeContent, recursionLevel }, extra) => {
@@ -79,6 +89,18 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
         undefined,
         { project, query },
       );
+      // Guard against returning a huge page tree inline: JSON.stringify would
+      // double the bytes and bloat the response. Drop the content and report
+      // the size so the caller can re-fetch with includeContent=false.
+      const size = Buffer.byteLength(JSON.stringify(data), "utf8");
+      if (size > MAX_INLINE_PAGE_BYTES) {
+        const { content: _omitted, ...metadata } = data;
+        return asText({
+          page: { ...metadata, contentOmitted: true, size },
+          eTag: etag,
+          message: `Page payload (${size} bytes) exceeds the ${MAX_INLINE_PAGE_BYTES}-byte inline limit; content omitted. Re-fetch with includeContent=false and recursionLevel=none for metadata only.`,
+        });
+      }
       return asText({ page: data, eTag: etag });
     },
   );
@@ -87,8 +109,8 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     "wiki_create_or_update_page",
     {
       description:
-        "Create or edit a wiki page at a path. Omit `version` to create a new page; " +
-        "to edit an existing page, pass the `eTag` returned by wiki_get_page as `version` " +
+        "Create or edit a wiki page at a path. Omit `eTag` to create a new page; " +
+        "to edit an existing page, pass the `eTag` returned by wiki_get_page " +
         "(Azure DevOps requires it to confirm you are editing the current revision). " +
         "Returns the saved page and its new `eTag`.",
       inputSchema: {
@@ -96,14 +118,14 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
         wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
         path: z.string().min(1).max(MAX_PATH_LENGTH).describe("Page path, e.g. /Home or /Docs/Setup"),
         content: z.string().describe("Markdown content for the page"),
-        version: z
+        eTag: z
           .string()
           .min(1)
           .optional()
           .describe("Current page version (the `eTag` from wiki_get_page); required to edit, omit to create"),
       },
     },
-    async ({ project, wikiIdentifier, path, content, version }, extra) => {
+    async ({ project, wikiIdentifier, path, content, eTag }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const { data, etag } = await client.requestWithEtag<Record<string, unknown>>(
         "PUT",
@@ -112,7 +134,7 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
         {
           project,
           query: { path },
-          headers: version ? { "If-Match": version } : undefined,
+          headers: eTag ? { "If-Match": eTag } : undefined,
         },
       );
       return asText({ page: data, eTag: etag });
