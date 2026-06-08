@@ -80,6 +80,23 @@ export class AzureDevOpsClient {
   }
 
   /**
+   * Perform a request and return both the parsed body and the response `ETag`.
+   * Used by endpoints that drive optimistic concurrency through ETags — e.g.
+   * Azure DevOps wiki pages, whose version is returned only in the `ETag`
+   * header and must be echoed back via `If-Match` to edit the page.
+   */
+  async requestWithEtag<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    options: RequestOptions = {},
+    contentType = "application/json",
+  ): Promise<{ data: T; etag?: string }> {
+    const { body: parsed, headers } = await this.requestRaw(method, path, body, options, contentType);
+    return { data: parsed as T, etag: headers.get("etag") ?? undefined };
+  }
+
+  /**
    * Fetch every item of a paged list endpoint, following the
    * `x-ms-continuationtoken` response header.
    *
