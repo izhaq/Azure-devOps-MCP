@@ -6,8 +6,8 @@
 > **Implementation status (see `tasks/todo.md` for the live checklist):**
 > - ✅ Foundation, config/logger, REST client, MCP server + domains + orchestrator, stdio transport
 > - ✅ Streamable HTTP transport (Origin/Host → 403, `X-ADO-PAT` → 401, security headers, body cap, optional direct TLS)
-> - ✅ Domains: `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds)
-> - ⬜ Remaining: `work`, `wiki`, `test-plans`; npm/Docker packaging; docs; CI
+> - ✅ Domains: `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds), `work` (boards/iterations)
+> - ⬜ Remaining: `wiki`, `test-plans`; npm/Docker packaging; docs; CI
 
 ## Objective
 
@@ -109,7 +109,7 @@ Tools are grouped by ADO area. Each tool validates inputs with `zod` and returns
 Organized by **domain** (the registration unit). Each tool validates inputs with `zod` and returns structured JSON. Destructive/creating tools are clearly named.
 
 - ✅ **`core`**: `core_list_projects`, `core_list_teams`
-- ⬜ **`work`** (boards/iterations/sprints): `work_list_iterations`, `work_list_backlog`, `work_get_capacity`
+- ✅ **`work`** (boards/iterations/sprints): `work_list_iterations`, `work_list_backlog_levels`, `work_get_capacity`
 - ✅ **`work-items`**: `wit_query` (WIQL), `wit_get`, `wit_create`, `wit_update`, `wit_add_comment`, `wit_list_types`
 - **`repositories`** (Git, incl. pull requests):
   - ✅ Git read: `repo_list`, `repo_list_branches`, `repo_get_file`, `repo_list_items`, `repo_list_commits`, `repo_get_commit`

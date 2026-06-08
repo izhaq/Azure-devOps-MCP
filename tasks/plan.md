@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T11 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines`). Next: T12 work/boards. Live checklist in `tasks/todo.md`.
+> Progress: **T1–T12 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work`). Next: T13 wiki. Live checklist in `tasks/todo.md`.
 
 ## Overview
 
@@ -170,7 +170,7 @@ Build foundation bottom-up; each task leaves the system green.
 **Dependencies:** T6 · **Files:** `src/tools/pipelines.ts`, test · **Scope:** M
 
 #### Task 12: `work` domain (boards/iterations)
-**Acceptance:** `work_list_iterations`, `work_list_backlog`, `work_get_capacity`.
+**Acceptance:** `work_list_iterations`, `work_list_backlog_levels`, `work_get_capacity`.
 **Verify:** unit tests; manual iteration list.
 **Dependencies:** T6 · **Files:** `src/tools/work.ts`, test · **Scope:** S
 
