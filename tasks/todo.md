@@ -2,7 +2,7 @@
 
 Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Respect dependency order; stop at checkpoints for review.
 
-**Progress: T1–T13 done** (foundation, stdio + Streamable HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki`). **Next: T14 (test-plans).** Checkpoints B & C (real on-prem call) still pending human verification.
+**Progress: T1–T14 done** — all tool domains complete (foundation, stdio + Streamable HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki` + `test-plans`). **Next: packaging/docs/CI (T15–T18).** Checkpoints B & C (real on-prem call) still pending human verification.
 
 ## Phase 1 — Foundation
 - [x] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
@@ -27,7 +27,7 @@ Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Res
 - [x] **T11** `pipelines` (pipelines + builds + queue + logs) — *M, deps: T6*
 - [x] **T12** `work` boards/iterations (iterations/backlog/capacity) — *S, deps: T6*
 - [x] **T13** `wiki` (list/get-page/create-or-update-page) — *S, deps: T6*
-- [ ] **T14** `test-plans` (plans/suites/cases) — *S, deps: T6*
+- [x] **T14** `test-plans` (plans/suites/cases) — *S, deps: T6*
 - [ ] **Checkpoint D:** all tools listed; coverage ≥80% on azure+tools; `-d` filtering works
 
 ## Phase 5 — Packaging, Docs, CI

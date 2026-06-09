@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T13 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki`). Next: T14 test-plans. Live checklist in `tasks/todo.md`.
+> Progress: **T1–T14 done** — all tool domains complete (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki` + `test-plans`). Next: packaging/docs/CI (T15–T18). Live checklist in `tasks/todo.md`.
 
 ## Overview
 
@@ -184,10 +184,15 @@ Build foundation bottom-up; each task leaves the system green.
 echoes it via `If-Match` (mandatory to edit, omitted to create). Caller
 headers can never override `Authorization`/`Accept`.
 
-#### Task 14: `test-plans` domain
+#### Task 14: `test-plans` domain — DONE
 **Acceptance:** `testplan_list`, `testplan_list_suites`, `testplan_list_cases`.
 **Verify:** unit tests; manual suite list.
 **Dependencies:** T6 · **Files:** `src/tools/test-plans.ts`, test · **Scope:** S
+**Notes:** Modern `testplan` REST area (not legacy `test`). All three are
+project-scoped reads that page via `x-ms-continuationtoken`, so they use
+`client.getAll` (follows the token, caps at `maxResults`/`top`).
+`testplan_list` exposes `owner`/`filterActivePlans`; `testplan_list_suites`
+exposes `asTreeView`.
 
 ### Checkpoint: All Domains (after T8–T14)
 - [ ] All v1 tools registered and listed
