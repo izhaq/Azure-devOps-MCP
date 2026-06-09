@@ -129,3 +129,47 @@ describe("configureTestPlansTools (plans)", () => {
     );
   });
 });
+
+describe("configureTestPlansTools (suites + cases)", () => {
+  it("registers the suite and case tools", () => {
+    const { tools } = setup([{ body: { value: [] } }]);
+    expect(tools.has("testplan_list_suites")).toBe(true);
+    expect(tools.has("testplan_list_cases")).toBe(true);
+  });
+
+  it("testplan_list_suites queries the plan's suites endpoint", async () => {
+    const { calls, tools } = setup([{ body: { value: [{ id: 10 }] } }]);
+    const suites = parseResult(
+      await tools.get("testplan_list_suites")!({ project: "Proj", planId: 5 }, {}),
+    ) as unknown[];
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/testplan/plans/5/suites");
+    expect(suites).toEqual([{ id: 10 }]);
+  });
+
+  it("testplan_list_suites forwards asTreeView", async () => {
+    const { calls, tools } = setup([{ body: { value: [] } }]);
+    await tools.get("testplan_list_suites")!({ project: "Proj", planId: 5, asTreeView: true }, {});
+    expect(calls[0]!.url).toContain("asTreeView=true");
+  });
+
+  it("testplan_list_cases queries the suite's test case endpoint", async () => {
+    const { calls, tools } = setup([{ body: { value: [{ workItem: { id: 42 } }] } }]);
+    const cases = parseResult(
+      await tools.get("testplan_list_cases")!({ project: "Proj", planId: 5, suiteId: 9 }, {}),
+    ) as unknown[];
+    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/testplan/plans/5/suites/9/testcase");
+    expect(cases).toEqual([{ workItem: { id: 42 } }]);
+  });
+
+  it("testplan_list_cases follows the continuation token and bounds to top", async () => {
+    const { calls, tools } = setup([
+      { body: { value: [{ id: 1 }, { id: 2 }] }, continuationToken: "C1" },
+      { body: { value: [{ id: 3 }, { id: 4 }] } },
+    ]);
+    const cases = parseResult(
+      await tools.get("testplan_list_cases")!({ project: "Proj", planId: 5, suiteId: 9, top: 3 }, {}),
+    ) as unknown[];
+    expect(cases).toHaveLength(3);
+    expect(calls[1]!.url).toContain("continuationToken=C1");
+  });
+});
