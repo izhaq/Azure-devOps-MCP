@@ -1,13 +1,13 @@
 # Spec: Azure DevOps MCP Server (On-Prem)
 
 > Status: **APPROVED — implementation in progress.** (Phase 1 / SPECIFY of the spec → plan → tasks → implement workflow; build underway.)
-> Owner: Dev tooling. Last updated: 2026-06-07.
+> Owner: Dev tooling. Last updated: 2026-06-09.
 >
 > **Implementation status (see `tasks/todo.md` for the live checklist):**
 > - ✅ Foundation, config/logger, REST client, MCP server + domains + orchestrator, stdio transport
 > - ✅ Streamable HTTP transport (Origin/Host → 403, `X-ADO-PAT` → 401, security headers, body cap, optional direct TLS)
-> - ✅ Domains: `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds), `work` (boards/iterations)
-> - ⬜ Remaining: `wiki`, `test-plans`; npm/Docker packaging; docs; CI
+> - ✅ Domains: `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds), `work` (boards/iterations), `wiki`
+> - ⬜ Remaining: `test-plans`; npm/Docker packaging; docs; CI
 
 ## Objective
 
@@ -115,7 +115,7 @@ Organized by **domain** (the registration unit). Each tool validates inputs with
   - ✅ Git read: `repo_list`, `repo_list_branches`, `repo_get_file`, `repo_list_items`, `repo_list_commits`, `repo_get_commit`
   - ✅ Pull requests: `pr_list`, `pr_get`, `pr_create`, `pr_add_comment`, `pr_update_status`, `pr_list_threads`
 - ✅ **`pipelines`** (builds): `pipeline_list`, `pipeline_get`, `build_list`, `build_get`, `build_queue`, `build_get_logs`
-- ⬜ **`wiki`**: `wiki_list`, `wiki_get_page`, `wiki_create_or_update_page`
+- ✅ **`wiki`**: `wiki_list`, `wiki_get_page`, `wiki_create_or_update_page`
 - ⬜ **`test-plans`**: `testplan_list`, `testplan_list_suites`, `testplan_list_cases`
 
 > Exact tool list is refined in the PLAN phase; this is the v1 commitment. Domains can be selectively enabled via `--domains`/`-d` (default: all).

@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T12 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work`). Next: T13 wiki. Live checklist in `tasks/todo.md`.
+> Progress: **T1–T13 done** (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki`). Next: T14 test-plans. Live checklist in `tasks/todo.md`.
 
 ## Overview
 
@@ -174,10 +174,15 @@ Build foundation bottom-up; each task leaves the system green.
 **Verify:** unit tests; manual iteration list.
 **Dependencies:** T6 · **Files:** `src/tools/work.ts`, test · **Scope:** S
 
-#### Task 13: `wiki` domain
+#### Task 13: `wiki` domain — DONE
 **Acceptance:** `wiki_list`, `wiki_get_page`, `wiki_create_or_update_page`.
 **Verify:** unit tests; manual page read/update.
 **Dependencies:** T6 · **Files:** `src/tools/wiki.ts`, test · **Scope:** S
+**Notes:** Page version rides the `ETag` response header. Added
+`client.requestWithEtag()` so `wiki_get_page` surfaces it as `eTag`, and a
+`headers` passthrough on `RequestOptions` so `wiki_create_or_update_page`
+echoes it via `If-Match` (mandatory to edit, omitted to create). Caller
+headers can never override `Authorization`/`Accept`.
 
 #### Task 14: `test-plans` domain
 **Acceptance:** `testplan_list`, `testplan_list_suites`, `testplan_list_cases`.

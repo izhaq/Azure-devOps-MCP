@@ -39,6 +39,11 @@ export interface RequestOptions {
    * "Get All Teams" requires `7.1-preview.3`).
    */
   apiVersion?: string;
+  /**
+   * Extra request headers (e.g. `If-Match` for wiki page edits). Cannot
+   * override `Authorization` or `Accept`, which the client always controls.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -77,6 +82,23 @@ export class AzureDevOpsClient {
     contentType = "application/json",
   ): Promise<T> {
     return this.request<T>("PATCH", path, body, options, contentType);
+  }
+
+  /**
+   * Perform a request and return both the parsed body and the response `ETag`.
+   * Used by endpoints that drive optimistic concurrency through ETags — e.g.
+   * Azure DevOps wiki pages, whose version is returned only in the `ETag`
+   * header and must be echoed back via `If-Match` to edit the page.
+   */
+  async requestWithEtag<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    options: RequestOptions = {},
+    contentType = "application/json",
+  ): Promise<{ data: T; etag?: string }> {
+    const { body: parsed, headers } = await this.requestRaw(method, path, body, options, contentType);
+    return { data: parsed as T, etag: headers.get("etag") ?? undefined };
   }
 
   /**
@@ -147,6 +169,7 @@ export class AzureDevOpsClient {
   ): Promise<{ body: unknown; headers: Headers }> {
     const url = this.buildUrl(path, options);
     const headers: Record<string, string> = {
+      ...options.headers,
       Authorization: buildBasicAuthHeader(this.opts.pat),
       Accept: "application/json",
     };
