@@ -30,10 +30,47 @@ destination is your configured on-prem Azure DevOps Server. No internet, no tele
 
 ## Install
 
+### From the internal registry (most users)
+
+The package is published to your corporate npm registry under the `@corp` scope.
+Point that scope at your registry once (in `~/.npmrc` or the project `.npmrc`):
+
+```ini
+@corp:registry=https://npm.corp.local/
+```
+
+Then install or run it like any other package:
+
+```bash
+# Install globally, exposing the `mcp-server-azuredevops` binary
+npm install -g @corp/azure-devops-mcp
+
+# …or run on demand without installing
+npx @corp/azure-devops-mcp --stdio
+```
+
+> Replace `@corp/azure-devops-mcp` and the registry URL with your organization's
+> actual scope and internal registry. No internet access is needed once the
+> package is in your registry.
+
+### From source (development)
+
 ```bash
 npm ci
 npm run build
+node dist/index.js --help
 ```
+
+### Publishing to the internal registry (maintainers)
+
+```bash
+npm version <patch|minor|major>   # bump the version
+npm publish                       # prepublishOnly runs typecheck + lint + tests;
+                                  # prepack rebuilds dist into the tarball
+```
+
+`npm pack` produces the same artifact locally if you want to inspect or
+side-load the `.tgz` before publishing.
 
 ## Configuration
 
@@ -178,8 +215,11 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 - ✅ Foundation, config/logging, REST client, MCP server + domains, stdio transport
 - ✅ Streamable HTTP transport (security + per-request PAT)
 - ✅ All tool domains: `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
-- ⬜ npm packaging, Dockerfile + hosted docs, cross-platform CI
+- ✅ npm packaging (bin, LICENSE, prepack/prepublish, internal-registry install notes)
+- ⬜ Dockerfile + hosted docs, cross-platform CI
 
 ## License
 
-Internal. See repository settings.
+[MIT](LICENSE) — matches the `license` field in `package.json`. If this should
+instead ship as internal/proprietary, change the `license` field to `UNLICENSED`
+and replace the `LICENSE` file accordingly.
