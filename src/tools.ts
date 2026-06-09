@@ -7,6 +7,7 @@ import { configureRepositoriesTools, configurePullRequestTools } from "./tools/r
 import { configurePipelinesTools } from "./tools/pipelines.js";
 import { configureWorkTools } from "./tools/work.js";
 import { configureWikiTools } from "./tools/wiki.js";
+import { configureTestPlansTools } from "./tools/test-plans.js";
 
 /**
  * Registers all enabled tool domains with the server.
@@ -26,6 +27,5 @@ export function registerTools(server: McpServer, deps: ToolDeps, domains: Domain
   whenEnabled(Domain.PIPELINES, () => configurePipelinesTools(server, deps));
   whenEnabled(Domain.WORK, () => configureWorkTools(server, deps));
   whenEnabled(Domain.WIKI, () => configureWikiTools(server, deps));
-  // Remaining domains (test-plans)
-  // are wired in their respective tasks (T14).
+  whenEnabled(Domain.TEST_PLANS, () => configureTestPlansTools(server, deps));
 }
