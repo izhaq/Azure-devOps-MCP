@@ -1,5 +1,7 @@
 # Azure DevOps MCP (on-prem)
 
+[![CI](https://github.com/izhaq/Azure-devOps-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/izhaq/Azure-devOps-MCP/actions/workflows/ci.yml)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes an
 **on-premises Azure DevOps Server** to AI agents (Cursor, Copilot, Tabnine, and any
 other MCP client) over the official Azure DevOps REST APIs.
@@ -216,7 +218,8 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 - ✅ Streamable HTTP transport (security + per-request PAT)
 - ✅ All tool domains: `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
 - ✅ npm packaging (bin, LICENSE, prepack/prepublish, internal-registry install notes)
-- ⬜ Dockerfile + hosted docs, cross-platform CI
+- ✅ Cross-platform CI (Windows/macOS/Linux × Node 20 + current LTS; typecheck/lint/build/test+coverage)
+- ⬜ Dockerfile + hosted docs
 
 ## License
 
