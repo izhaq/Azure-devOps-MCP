@@ -152,6 +152,36 @@ describe("configureTestPlansTools (suites + cases)", () => {
     expect(calls[0]!.url).toContain("asTreeView=true");
   });
 
+  it("testplan_list_suites omits asTreeView when not provided", async () => {
+    const { calls, tools } = setup([{ body: { value: [] } }]);
+    await tools.get("testplan_list_suites")!({ project: "Proj", planId: 5 }, {});
+    expect(calls[0]!.url).not.toContain("asTreeView");
+  });
+
+  it("testplan_list_suites follows the continuation token and bounds to top", async () => {
+    const { calls, tools } = setup([
+      { body: { value: [{ id: 1 }, { id: 2 }] }, continuationToken: "S1" },
+      { body: { value: [{ id: 3 }, { id: 4 }] } },
+    ]);
+    const suites = parseResult(
+      await tools.get("testplan_list_suites")!({ project: "Proj", planId: 5, top: 3 }, {}),
+    ) as unknown[];
+    expect(suites).toHaveLength(3);
+    expect(calls[1]!.url).toContain("continuationToken=S1");
+  });
+
+  it("uses the per-request PAT and maps ADO errors for nested tools", async () => {
+    const ok = setup([{ body: { value: [] } }]);
+    const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };
+    await ok.tools.get("testplan_list_cases")!({ project: "Proj", planId: 5, suiteId: 9 }, extra);
+    expect(ok.calls[0]!.auth).toBe(`Basic ${Buffer.from(":req-pat").toString("base64")}`);
+
+    const err = setup([{ body: { message: "TF401174: suite not found" }, status: 404 }]);
+    await expect(
+      err.tools.get("testplan_list_suites")!({ project: "Proj", planId: 5 }, {}),
+    ).rejects.toThrow(/Azure DevOps API error 404: TF401174/);
+  });
+
   it("testplan_list_cases queries the suite's test case endpoint", async () => {
     const { calls, tools } = setup([{ body: { value: [{ workItem: { id: 42 } }] } }]);
     const cases = parseResult(
