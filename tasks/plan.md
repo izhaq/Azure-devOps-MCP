@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T14 done** — all tool domains complete (foundation, stdio + HTTP transports, `core` + `work-items` + `repositories` read + pull requests + `pipelines` + `work` + `wiki` + `test-plans`). Next: packaging/docs/CI (T15–T18). Live checklist in `tasks/todo.md`.
+> Progress: **T1–T14 done** (all tool domains) **+ T15 (npm packaging)**. Next: T16 Docker / T17 docs / T18 CI. Live checklist in `tasks/todo.md`.
 
 ## Overview
 
@@ -201,10 +201,15 @@ exposes `asTreeView`.
 
 ### Phase 5 — Packaging, Docs, CI
 
-#### Task 15: npm packaging
+#### Task 15: npm packaging — DONE
 **Acceptance:** `bin`/`files`/prepublish correct; `npm pack` yields a clean installable artifact; internal-registry install notes.
 **Verify:** `npm pack` + install the tarball in a temp dir and run `--stdio`.
-**Dependencies:** T7, all domains · **Files:** `package.json`, `.npmignore` · **Scope:** S
+**Dependencies:** T7, all domains · **Files:** `package.json`, `LICENSE`, `README.md` · **Scope:** S
+**Notes:** Used the `files` allowlist (`dist`, `README.md`, `LICENSE`) instead of
+`.npmignore`. Added `prepack` (build) + `prepublishOnly` (typecheck/lint/test),
+an MIT `LICENSE`, and discovery metadata. Verified by packing and installing the
+`.tgz` in a temp dir — the `mcp-server-azuredevops` bin runs `--help` with the
+shebang intact. Internal-registry install/publish notes added to the README.
 
 #### Task 16: Dockerfile + hosted deploy
 **Acceptance:** Multi-stage Dockerfile runs `--http`; `docs/setup-hosted-http.md` with reverse-proxy TLS example + env config.

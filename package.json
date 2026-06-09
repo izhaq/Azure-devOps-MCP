@@ -2,12 +2,26 @@
   "name": "@corp/azure-devops-mcp",
   "version": "0.1.0",
   "description": "MCP server for on-premises Azure DevOps Server, backed by the official REST APIs. Supports stdio and Streamable HTTP transports with per-user PAT auth.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "azure-devops",
+    "azure-devops-server",
+    "tfs",
+    "on-premises",
+    "pat",
+    "ai",
+    "llm"
+  ],
   "type": "module",
   "bin": {
     "mcp-server-azuredevops": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
   ],
   "engines": {
     "node": ">=20"
@@ -20,7 +34,17 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/izhaq/Azure-devOps-MCP.git"
+  },
+  "homepage": "https://github.com/izhaq/Azure-devOps-MCP#readme",
+  "bugs": {
+    "url": "https://github.com/izhaq/Azure-devOps-MCP/issues"
   },
   "license": "MIT",
   "dependencies": {
