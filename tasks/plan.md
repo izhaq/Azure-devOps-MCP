@@ -229,7 +229,8 @@ shebang intact. Internal-registry install/publish notes added to the README.
 `lts/*` auto-tracks the current LTS). Gates run as separate steps: typecheck,
 lint, build, test:coverage. `npm ci` with built-in npm cache; least-privilege
 `contents: read`; `concurrency` cancels superseded runs. No external/internet
-services (coverage stays local) to fit the offline ethos. All gates verified
+services (coverage stays local) to fit the offline ethos. Verified with a clean
+`npm ci` (after resyncing `package-lock.json`) + typecheck/lint/build/test:coverage
 green locally on Node 24 (coverage ~94% statements).
 
 ### Checkpoint: Complete
