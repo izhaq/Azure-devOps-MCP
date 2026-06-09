@@ -7,10 +7,10 @@ other MCP client) over the official Azure DevOps REST APIs.
 Built for **fully offline / air-gapped** environments: the only outbound network
 destination is your configured on-prem Azure DevOps Server. No internet, no telemetry.
 
-> Status: **in active development.** Foundation, both transports, and the `core`,
-> `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds),
-> `work` (boards/iterations), and `wiki` tool domains are implemented. Remaining
-> domains and packaging are in progress — see [Roadmap](#roadmap).
+> Status: **in active development.** Foundation, both transports, and **all tool
+> domains** are implemented — `core`, `work-items`, `repositories` (Git read +
+> pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, and
+> `test-plans`. Packaging, docs, and CI are in progress — see [Roadmap](#roadmap).
 
 ## Features
 
@@ -140,10 +140,12 @@ Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (defa
 ### `wiki` ✅
 - `wiki_list` — list a project's wikis
 - `wiki_get_page` — get a page by path; returns its content and version (`eTag`)
-- `wiki_create_or_update_page` — create a page (omit `version`) or edit it (pass the `eTag` from `wiki_get_page`)
+- `wiki_create_or_update_page` — create a page (omit `eTag`) or edit it (pass the `eTag` from `wiki_get_page`)
 
-### Planned
-- `test-plans`.
+### `test-plans` ✅
+- `testplan_list` — list a project's test plans (filter by owner / active)
+- `testplan_list_suites` — list a plan's test suites (optional `asTreeView` hierarchy)
+- `testplan_list_cases` — list the test cases in a suite
 
 ## Security
 
@@ -175,8 +177,7 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 
 - ✅ Foundation, config/logging, REST client, MCP server + domains, stdio transport
 - ✅ Streamable HTTP transport (security + per-request PAT)
-- ✅ `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki` domains
-- ⬜ `test-plans` domain
+- ✅ All tool domains: `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
 - ⬜ npm packaging, Dockerfile + hosted docs, cross-platform CI
 
 ## License
