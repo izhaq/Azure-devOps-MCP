@@ -9,7 +9,7 @@ other MCP client) over the official Azure DevOps REST APIs.
 Built for **fully offline / air-gapped** environments: the only outbound network
 destination is your configured on-prem Azure DevOps Server. No internet, no telemetry.
 
-> Status: **in active development.** Foundation, both transports, and **all tool
+> Status: **build complete; human verification pending.** Foundation, both transports, and **all tool
 > domains** are implemented — `core`, `work-items`, `repositories` (Git read +
 > pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, and
 > `test-plans`. npm packaging, cross-platform CI, the Docker/hosted-HTTP deploy,

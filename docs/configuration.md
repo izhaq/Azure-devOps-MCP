@@ -61,7 +61,7 @@ These only matter when running with `--http`. See
 | `ADO_PAGE_SIZE` | No | `50` | Page size for paged Azure DevOps requests. Positive integer. |
 | `ADO_MAX_RESULTS` | No | `200` | Upper bound on items a list tool returns. Positive integer. |
 | `ADO_TIMEOUT_MS` | No | `30000` | Per-request upstream timeout in milliseconds. Positive integer. |
-| `ADO_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, `error`. PATs are always redacted from logs regardless of level. |
+| `ADO_LOG_LEVEL` | No | `info` | One of `debug`, `info`, `warn`, `error`. The configured `ADO_PAT` is redacted from logs regardless of level. |
 
 ## CLI flags
 

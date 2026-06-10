@@ -63,6 +63,11 @@ All examples use the **global install** command form. To run from source,
 replace `"command": "mcp-server-azuredevops"` with `"command": "node"` and put
 the absolute path to `dist/index.js` as the first arg.
 
+> **Keep your PAT out of git.** These files contain a secret. Prefer the VS Code
+> `inputs` prompt pattern (below), keep client config files out of version
+> control (e.g. add them to `.gitignore`), or supply `ADO_PAT` via your shell
+> environment instead of hard-coding it.
+
 ### Cursor
 
 `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
@@ -95,6 +100,7 @@ isn't stored in plaintext:
   ],
   "servers": {
     "azure-devops": {
+      "type": "stdio",
       "command": "mcp-server-azuredevops",
       "args": ["--stdio"],
       "env": {
@@ -109,7 +115,8 @@ isn't stored in plaintext:
 
 ### Tabnine
 
-In Tabnine's MCP configuration, add a server with the same shape:
+In Tabnine's MCP configuration file (`~/.tabnine/mcp_servers.json` globally, or
+`.tabnine/mcp_servers.json` in a project), add a server with the same shape:
 
 ```json
 {
@@ -190,7 +197,7 @@ mcp-server-azuredevops --version
 mcp-server-azuredevops --help
 ```
 
-A quick end-to-end check (lists your projects) — set the env first:
+A quick smoke test (validates config and starts the server) — set the env first:
 
 ```bash
 export ADO_SERVER_URL="https://devops.corp.local/tfs"
