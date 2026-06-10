@@ -30,7 +30,7 @@ Scaffolding/tooling (T1)
    │                          │
    │                          └── core domain  →  WALKING SKELETON (T6)
    │                                   │
-   │                 ┌─────────────────┼─────────────── HTTP transport + security (T7)
+   │                 ┌──────────────────┼─────────────── HTTP transport + security (T7)
    │                 │                 │
    │   domains (parallel after T6): work-items (T8), repos (T9), pull-requests (T10),
    │   pipelines (T11), work/boards (T12), wiki (T13), test-plans (T14)
@@ -223,10 +223,17 @@ via node (no shell/curl) and treats the `401` (missing PAT) as alive. `docs/setu
 covers build/run, compose, an nginx TLS-termination example, the full env table, and
 curl-based `401`/`403`/`initialize` verification. `.dockerignore` keeps the context lean.
 
-#### Task 17: Documentation
+#### Task 17: Documentation — DONE
 **Acceptance:** `docs/configuration.md` (all options), `docs/setup-local-stdio.md` (client-agnostic `mcp.json` examples for Tabnine/Copilot/Cursor/etc.), updated `README.md`.
 **Verify:** docs reviewed; sample configs match real flags/env.
 **Dependencies:** T6 (can start), finalize after T16 · **Files:** `docs/*.md`, `README.md` · **Scope:** M
+**Notes:** `docs/configuration.md` is the full env-var + CLI-flag reference, with
+precedence (CLI `--port`/`-d` override env) and PAT-resolution rules, cross-checked
+against `src/config.ts` and `src/index.ts`. `docs/setup-local-stdio.md` is
+client-agnostic with copy-paste `mcp.json` for Cursor, GitHub Copilot (VS Code
+`inputs` prompt for the PAT), Tabnine, and Claude Desktop, plus install (registry +
+source), domain filtering via `-d`, verify steps, and a troubleshooting table.
+README links both and the roadmap marks T17 done.
 
 #### Task 18: Cross-platform CI — DONE
 **Acceptance:** CI matrix Windows/macOS/Linux × Node 20 + current LTS; gates typecheck + lint + build + test + coverage.

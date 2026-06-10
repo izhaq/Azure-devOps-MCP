@@ -9,11 +9,11 @@ other MCP client) over the official Azure DevOps REST APIs.
 Built for **fully offline / air-gapped** environments: the only outbound network
 destination is your configured on-prem Azure DevOps Server. No internet, no telemetry.
 
-> Status: **in active development.** Foundation, both transports, and **all tool
+> Status: **build complete; human verification pending.** Foundation, both transports, and **all tool
 > domains** are implemented — `core`, `work-items`, `repositories` (Git read +
 > pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, and
-> `test-plans`. npm packaging, cross-platform CI, and the Docker/hosted-HTTP
-> deploy are done; remaining client/config reference docs are in progress — see
+> `test-plans`. npm packaging, cross-platform CI, the Docker/hosted-HTTP deploy,
+> and the configuration + client setup docs are all done — see
 > [Roadmap](#roadmap).
 
 ## Features
@@ -96,7 +96,8 @@ Common ones:
 | `ADO_TIMEOUT_MS` | no | `30000` | Per-request timeout |
 | `ADO_LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
 
-See [`docs/configuration.md`](docs/configuration.md) for the full list (planned).
+See [`docs/configuration.md`](docs/configuration.md) for the complete reference
+(every variable, CLI flags, precedence, and PAT resolution).
 
 ## Running
 
@@ -115,7 +116,10 @@ CLI flags: `--stdio` | `--http`, `--port <n>`, `--domains`/`-d <list>`, `--versi
 
 ### Connecting an MCP client (stdio)
 
-Point your client's MCP config at the built entry point, for example:
+Client-agnostic setup with copy-paste examples for Cursor, GitHub Copilot,
+Tabnine, and Claude Desktop is in
+[`docs/setup-local-stdio.md`](docs/setup-local-stdio.md). The shape is the same
+everywhere — point your client's MCP config at the entry point, for example:
 
 ```json
 {
@@ -241,7 +245,7 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 - ✅ npm packaging (bin, LICENSE, prepack/prepublish, internal-registry install notes)
 - ✅ Cross-platform CI (Windows/macOS/Linux × Node 20 + current LTS; typecheck/lint/build/test+coverage)
 - ✅ Dockerfile + hosted HTTP deploy docs (reverse-proxy TLS)
-- ⬜ Client config & configuration reference docs
+- ✅ Configuration reference + client-agnostic local (stdio) setup docs
 
 ## License
 

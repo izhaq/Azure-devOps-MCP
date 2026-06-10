@@ -8,7 +8,8 @@
 > - ✅ Streamable HTTP transport (Origin/Host → 403, `X-ADO-PAT` → 401, security headers, body cap, optional direct TLS)
 > - ✅ Domains (all complete): `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
 > - ✅ npm packaging; cross-platform CI; Docker image + hosted-HTTP deploy docs (reverse-proxy TLS)
-> - ⬜ Remaining: client config & configuration reference docs
+> - ✅ Configuration reference (`docs/configuration.md`) + client-agnostic local stdio setup (`docs/setup-local-stdio.md`)
+> - ⬜ Remaining: human verification checkpoints (real authenticated on-prem call)
 
 ## Objective
 
@@ -49,14 +50,14 @@ Build a **Model Context Protocol (MCP) server** that exposes **Azure DevOps Serv
 ## Architecture
 
 ```
-                       ┌──────────────────────────────┐
+                       ┌───────────────────────────────┐
    MCP client ──stdio──▶│         MCP Server core      │
    (per dev)            │  - tool registry             │
                         │  - request context (PAT,     │
    MCP client ──HTTP───▶│    collection, api-version)  │──REST──▶ On-prem Azure
    (remote, LAN)        │  - input validation (zod)    │         DevOps Server
                         │  - error mapping             │         (only network dest)
-                        └──────────────┬───────────────┘
+                        └───────────────┴───────────────┘
                                        │
                           ┌────────────┴────────────┐
                           │ Azure DevOps REST client │
@@ -64,9 +65,9 @@ Build a **Model Context Protocol (MCP) server** that exposes **Azure DevOps Serv
                           │  - api-version           │
                           │  - PAT Basic auth        │
                           │  - pagination / errors   │
-                          └─────────────┬────────────┘
+                          └─────────────┴──────────┘
                                         │
-        ┌────┬──────┬──────────────┬──────────┬──────┬──────┬───────────┐
+        ┌────┬──────┬────────────────┬──────────┬──────┬──────┬───────────┐
       core  work  work-items  repositories  pipelines  wiki  test-plans   ← domain modules
 ```
 
@@ -286,4 +287,3 @@ These were open questions, resolved per MCP-spec best practice and how official/
 
 - **npm scope + Docker registry path** — confirm the real internal package scope and Docker registry path to replace the placeholders above.
 - **Reverse proxy** — confirm there is an internal reverse proxy available for TLS termination in front of the hosted container (vs. needing the container to serve HTTPS directly).
-```
