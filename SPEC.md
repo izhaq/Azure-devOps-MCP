@@ -7,7 +7,8 @@
 > - ✅ Foundation, config/logger, REST client, MCP server + domains + orchestrator, stdio transport
 > - ✅ Streamable HTTP transport (Origin/Host → 403, `X-ADO-PAT` → 401, security headers, body cap, optional direct TLS)
 > - ✅ Domains (all complete): `core`, `work-items`, `repositories` (Git **read** + pull requests `pr_*`), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
-> - ⬜ Remaining: npm/Docker packaging; docs; CI
+> - ✅ npm packaging; cross-platform CI; Docker image + hosted-HTTP deploy docs (reverse-proxy TLS)
+> - ⬜ Remaining: client config & configuration reference docs
 
 ## Objective
 

@@ -211,10 +211,17 @@ an MIT `LICENSE`, and discovery metadata. Verified by packing and installing the
 `.tgz` in a temp dir — the `mcp-server-azuredevops` bin runs `--help` with the
 shebang intact. Internal-registry install/publish notes added to the README.
 
-#### Task 16: Dockerfile + hosted deploy
+#### Task 16: Dockerfile + hosted deploy — DONE
 **Acceptance:** Multi-stage Dockerfile runs `--http`; `docs/setup-hosted-http.md` with reverse-proxy TLS example + env config.
 **Verify:** `docker build` + `docker run` serves `/mcp`; 403/401 checks hold behind it.
 **Dependencies:** T7 · **Files:** `Dockerfile`, `.dockerignore`, `docs/setup-hosted-http.md` · **Scope:** M
+**Notes:** Three-stage build (build → prod-deps → runtime) on `node:22-bookworm-slim`,
+pinnable via `NODE_VERSION` build-arg. Runtime ships only `dist/` + production deps,
+runs as the non-root `node` user, defaults `ADO_HTTP_HOST=0.0.0.0`, `ENTRYPOINT node
+dist/index.js` with default `CMD ["--http"]`. `HEALTHCHECK` POSTs `/mcp` over loopback
+via node (no shell/curl) and treats the `401` (missing PAT) as alive. `docs/setup-hosted-http.md`
+covers build/run, compose, an nginx TLS-termination example, the full env table, and
+curl-based `401`/`403`/`initialize` verification. `.dockerignore` keeps the context lean.
 
 #### Task 17: Documentation
 **Acceptance:** `docs/configuration.md` (all options), `docs/setup-local-stdio.md` (client-agnostic `mcp.json` examples for Tabnine/Copilot/Cursor/etc.), updated `README.md`.

@@ -1,0 +1,31 @@
+# Keep the build context small and deterministic. The image builds from source
+# inside the builder stage, so host build artifacts and local-only files are excluded.
+.git
+.gitignore
+.github
+node_modules
+dist
+coverage
+*.log
+
+# Local secrets / env — never bake into an image layer
+.env
+.env.local
+.env.*.local
+
+# Editor / OS cruft
+.DS_Store
+.vscode
+.idea
+
+# Docs, specs, and agent tooling are not needed at runtime
+docs
+tasks
+.cursor
+.sdd
+*.md
+!README.md
+
+# Tests are run in CI, not in the image
+tests
+vitest.config.*
