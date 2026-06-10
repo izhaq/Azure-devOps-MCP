@@ -47,6 +47,11 @@
     "url": "https://github.com/izhaq/Azure-devOps-MCP/issues"
   },
   "license": "MIT",
+  "overrides": {
+    "@emnapi/core": "1.11.0",
+    "@emnapi/runtime": "1.11.0",
+    "@emnapi/wasi-threads": "1.2.2"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
