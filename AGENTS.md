@@ -13,13 +13,15 @@ Guidance for AI coding agents working in this repository.
 
 ## Current status
 
-**In progress (T1–T14 done — all tool domains complete).** Implemented: project scaffolding, config +
-logger (PAT redaction), REST client (`src/azure/`), per-request context, MCP server + domain
-orchestrator, **stdio** and **Streamable HTTP** transports, and the `core`, `work-items`,
+**Build complete (T1–T18 done); pending human verification of a real on-prem call.** Implemented:
+project scaffolding, config + logger (PAT redaction), REST client (`src/azure/`), per-request context,
+MCP server + domain orchestrator, **stdio** and **Streamable HTTP** transports, and the `core`, `work-items`,
 `repositories` (Git **read** + pull requests), `pipelines` (builds), `work` (boards/iterations),
-`wiki`, and `test-plans` tool domains, plus npm packaging (T15), cross-platform CI (T18), and the
-Docker image + hosted-HTTP deploy docs (T16). Next up: client config & configuration reference docs
-(T17). The live checklist is `tasks/todo.md`; spec is `SPEC.md`; plan is `tasks/plan.md`.
+`wiki`, and `test-plans` tool domains, plus npm packaging (T15), cross-platform CI (T18), the
+Docker image + hosted-HTTP deploy docs (T16), and the configuration + client-agnostic stdio setup
+docs (T17). All planned build tasks (T1–T18) are done; remaining work is human verification of a
+real authenticated on-prem call. The live checklist is `tasks/todo.md`; spec is `SPEC.md`; plan is
+`tasks/plan.md`.
 
 When adding a domain, follow the existing pattern: `src/tools/<domain>.ts` exports
 `configure<Domain>Tools(server, deps)`, register it in `src/tools.ts` behind its `Domain`,
