@@ -1,7 +1,7 @@
 # Implementation Plan: Azure DevOps MCP Server (On-Prem)
 
 > Derived from `SPEC.md`. Status: **APPROVED — in progress** (Phase 2 / PLAN of spec → plan → tasks → implement).
-> Progress: **T1–T14 done** (all tool domains) **+ T15 (npm packaging)**. Next: T16 Docker / T17 docs / T18 CI. Live checklist in `tasks/todo.md`.
+> Progress: **T1–T14 done** (all tool domains) **+ T15 (npm packaging) + T18 (CI)**. Next: T16 Docker / T17 docs. Live checklist in `tasks/todo.md`.
 
 ## Overview
 
@@ -221,10 +221,23 @@ shebang intact. Internal-registry install/publish notes added to the README.
 **Verify:** docs reviewed; sample configs match real flags/env.
 **Dependencies:** T6 (can start), finalize after T16 · **Files:** `docs/*.md`, `README.md` · **Scope:** M
 
-#### Task 18: Cross-platform CI
-**Acceptance:** CI matrix Windows/macOS/Linux × Node 20 + current LTS; gates lint + build + test + coverage.
+#### Task 18: Cross-platform CI — DONE
+**Acceptance:** CI matrix Windows/macOS/Linux × Node 20 + current LTS; gates typecheck + lint + build + test + coverage.
 **Verify:** CI green on all matrix legs.
-**Dependencies:** T1 (extend later) · **Files:** `.github/workflows/ci.yml` (or internal CI) · **Scope:** M
+**Dependencies:** T1 (extend later) · **Files:** `.github/workflows/ci.yml` · **Scope:** M
+**Notes:** Matrix is `os {ubuntu,windows,macos} × node {20.x, lts/*}` (6 legs;
+`lts/*` auto-tracks the current LTS). Gates run as separate steps: typecheck,
+lint, build, test:coverage. `npm ci` with built-in npm cache; least-privilege
+`contents: read`; `concurrency` cancels superseded runs. No external/internet
+services (coverage stays local) to fit the offline ethos. Verified with a clean
+`npm ci` (after resyncing `package-lock.json`) + typecheck/lint/build/test:coverage
+green locally on Node 24 (coverage ~94% statements) and on all 6 CI legs.
+**`package.json` `overrides`:** `@emnapi/core`/`@emnapi/runtime` (1.11.0) and
+`@emnapi/wasi-threads` (1.2.2) are pinned. These are dev-only optional+peer deps of
+rolldown's wasm32-wasi fallback (via vitest 4); per-platform optional-dep pruning made
+Linux/Windows `npm ci` want a second `@emnapi` copy that a macOS-generated lockfile
+didn't record, breaking `npm ci`. Pinning collapses them to one deterministic tree.
+Revisit (and try removing) these on future vitest/rolldown upgrades.
 
 ### Checkpoint: Complete
 - [ ] All acceptance criteria met; success criteria in `SPEC.md` satisfied

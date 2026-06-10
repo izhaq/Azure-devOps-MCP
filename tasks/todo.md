@@ -2,7 +2,7 @@
 
 Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Respect dependency order; stop at checkpoints for review.
 
-**Progress: T1–T14 done** (all tool domains) **+ T15 (npm packaging).** **Next: T16 Docker / T17 docs / T18 CI.** Checkpoints B & C (real on-prem call) still pending human verification.
+**Progress: T1–T14 done** (all tool domains) **+ T15 (npm packaging) + T18 (CI).** **Next: T16 Docker / T17 docs.** Checkpoints B & C (real on-prem call) still pending human verification.
 
 ## Phase 1 — Foundation
 - [x] **T1** Project scaffolding & tooling (package.json/tsconfig/eslint/prettier/vitest/build) — *M, deps: none*
@@ -28,13 +28,13 @@ Execution checklist derived from `tasks/plan.md`. Mark `- [x]` as completed. Res
 - [x] **T12** `work` boards/iterations (iterations/backlog/capacity) — *S, deps: T6*
 - [x] **T13** `wiki` (list/get-page/create-or-update-page) — *S, deps: T6*
 - [x] **T14** `test-plans` (plans/suites/cases) — *S, deps: T6*
-- [ ] **Checkpoint D:** all tools listed; coverage ≥80% on azure+tools; `-d` filtering works
+- [x] **Checkpoint D:** all tools listed; coverage ≥80% on azure+tools (~94% statements); `-d` filtering works
 
 ## Phase 5 — Packaging, Docs, CI
 - [x] **T15** npm packaging (bin/files/prepublish; `npm pack` install test) — *S, deps: T7 + domains*
 - [ ] **T16** Dockerfile + `docs/setup-hosted-http.md` (reverse-proxy TLS) — *M, deps: T7*
 - [ ] **T17** Docs: `configuration.md`, `setup-local-stdio.md` (client-agnostic), README — *M, deps: T6*
-- [ ] **T18** Cross-platform CI matrix (win/mac/linux × Node 20 + LTS) — *M, deps: T1*
+- [x] **T18** Cross-platform CI matrix (win/mac/linux × Node 20 + LTS) — *M, deps: T1*
 - [ ] **Checkpoint E:** success criteria met; CI green; npm + Docker artifacts; ready for review
 
 ## Blockers / Notes
