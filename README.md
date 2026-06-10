@@ -12,8 +12,9 @@ destination is your configured on-prem Azure DevOps Server. No internet, no tele
 > Status: **in active development.** Foundation, both transports, and **all tool
 > domains** are implemented — `core`, `work-items`, `repositories` (Git read +
 > pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, and
-> `test-plans`. npm packaging and cross-platform CI are done; Docker and hosted
-> docs are in progress — see [Roadmap](#roadmap).
+> `test-plans`. npm packaging, cross-platform CI, and the Docker/hosted-HTTP
+> deploy are done; remaining client/config reference docs are in progress — see
+> [Roadmap](#roadmap).
 
 ## Features
 
@@ -132,6 +133,25 @@ Point your client's MCP config at the built entry point, for example:
 }
 ```
 
+### Docker (hosted HTTP)
+
+Run one shared instance for the team. The image's default command is `--http`.
+
+```bash
+docker build -t azure-devops-mcp:latest .
+
+docker run --rm -p 3000:3000 \
+  -e ADO_SERVER_URL="https://devops.corp.local/tfs" \
+  -e ADO_COLLECTION="DefaultCollection" \
+  azure-devops-mcp:latest
+```
+
+In hosted mode there is **no `ADO_PAT`** — each client sends its own PAT in the
+`X-ADO-PAT` header per request. Because PATs travel on every request, put the
+server behind TLS (reverse proxy or `ADO_TLS_CERT`/`ADO_TLS_KEY`). See
+[`docs/setup-hosted-http.md`](docs/setup-hosted-http.md) for the reverse-proxy
+TLS example, full config, and `401`/`403` verification steps.
+
 ## Available tools
 
 Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (default: all).
@@ -220,7 +240,8 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 - ✅ All tool domains: `core`, `work-items`, `repositories` (Git read + pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, `test-plans`
 - ✅ npm packaging (bin, LICENSE, prepack/prepublish, internal-registry install notes)
 - ✅ Cross-platform CI (Windows/macOS/Linux × Node 20 + current LTS; typecheck/lint/build/test+coverage)
-- ⬜ Dockerfile + hosted docs
+- ✅ Dockerfile + hosted HTTP deploy docs (reverse-proxy TLS)
+- ⬜ Client config & configuration reference docs
 
 ## License
 
