@@ -38,12 +38,18 @@ docker run --rm -p 3000:3000 \
   -e ADO_SERVER_URL="https://devops.corp.local/tfs" \
   -e ADO_COLLECTION="DefaultCollection" \
   -e ADO_API_VERSION="7.1" \
-  -e ADO_ALLOWED_ORIGINS="https://devbox.corp.local" \
+  -e ADO_ALLOWED_ORIGINS="https://devops-mcp.corp.local" \
   azure-devops-mcp:latest
 ```
 
 Note there is **no `ADO_PAT`** here — in hosted mode the PAT comes from each
 client request, not from server config.
+
+> Set `ADO_ALLOWED_ORIGINS` to the **public** URL clients use to reach the server
+> (typically your reverse proxy's hostname, e.g. `https://devops-mcp.corp.local`),
+> not the container's internal address. This both gates browser `Origin`s and adds
+> that host to the `Host` allowlist. Keep this value identical across the run
+> command, compose, and the proxy `server_name` below.
 
 ### docker compose
 
@@ -59,7 +65,7 @@ services:
       ADO_SERVER_URL: "https://devops.corp.local/tfs"
       ADO_COLLECTION: "DefaultCollection"
       ADO_API_VERSION: "7.1"
-      ADO_ALLOWED_ORIGINS: "https://devbox.corp.local"
+      ADO_ALLOWED_ORIGINS: "https://devops-mcp.corp.local"
       ADO_LOG_LEVEL: "info"
 ```
 
@@ -155,7 +161,8 @@ from a shell that can reach the deployment.
 curl -i -X POST https://devops-mcp.corp.local/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# HTTP/1.1 401 Unauthorized — "missing X-ADO-PAT header"
+# HTTP/1.1 401 Unauthorized
+# {"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized: missing x-ado-pat header."},"id":null}
 ```
 
 **b) Disallowed `Origin` → `403`** (simulates a browser DNS-rebinding attempt)
@@ -166,7 +173,8 @@ curl -i -X POST https://devops-mcp.corp.local/mcp \
   -H "Origin: https://evil.example" \
   -H "X-ADO-PAT: dummy" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# HTTP/1.1 403 Forbidden — Origin not in ADO_ALLOWED_ORIGINS
+# HTTP/1.1 403 Forbidden
+# {"jsonrpc":"2.0","error":{"code":-32600,"message":"Forbidden: Origin/Host not allowed."},"id":null}
 ```
 
 **c) Valid PAT → MCP `initialize` succeeds**

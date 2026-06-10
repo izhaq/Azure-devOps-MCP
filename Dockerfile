@@ -49,9 +49,10 @@ EXPOSE 3000
 # Run as the unprivileged user shipped with the official Node image.
 USER node
 
-# Liveness probe: the server answers POST /mcp with 401 when the PAT header is
-# absent, which is enough to prove the transport is up. Uses node (no shell/curl
-# needed). If you terminate TLS *inside* the container, adjust or drop this.
+# Liveness probe: any HTTP response to POST /mcp proves the transport is up
+# (with no PAT header the server replies 401, which counts as alive). Uses node
+# (no shell/curl needed). If you terminate TLS *inside* the container, this
+# plain-HTTP probe won't match — adjust or drop it (see docs/setup-hosted-http.md).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD ["node", "-e", "const p=process.env.ADO_HTTP_PORT||3000;const r=require('http').request({host:'127.0.0.1',port:p,path:'/mcp',method:'POST',timeout:3000},(res)=>process.exit(res.statusCode?0:1));r.on('error',()=>process.exit(1));r.on('timeout',()=>{r.destroy();process.exit(1)});r.end();"]
 
