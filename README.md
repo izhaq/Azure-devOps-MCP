@@ -12,7 +12,8 @@ destination is your configured on-prem Azure DevOps Server. No internet, no tele
 > Status: **in active development.** Foundation, both transports, and **all tool
 > domains** are implemented — `core`, `work-items`, `repositories` (Git read +
 > pull requests), `pipelines` (builds), `work` (boards/iterations), `wiki`, and
-> `test-plans`. Packaging, docs, and CI are in progress — see [Roadmap](#roadmap).
+> `test-plans`. npm packaging and cross-platform CI are done; Docker and hosted
+> docs are in progress — see [Roadmap](#roadmap).
 
 ## Features
 
