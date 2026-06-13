@@ -211,6 +211,13 @@ Tools are grouped by **domain**; enable a subset with `-d` / `ADO_DOMAINS` (defa
 - `testplan_list_suites` — list a plan's test suites (optional `asTreeView` hierarchy)
 - `testplan_list_cases` — list the test cases in a suite
 
+## Verifying against your server
+
+The automated tests can't reach your air-gapped server, so a human runs the final
+checks. See [`docs/verification-runbook.md`](docs/verification-runbook.md) for a
+cross-platform (Windows/macOS/Linux) runbook covering the stdio real call,
+hosted-HTTP security gates, and the sign-off checklist.
+
 ## Security
 
 - The PAT is treated as a secret: never logged, never persisted, never put in errors.
@@ -246,6 +253,7 @@ Tracked in [`tasks/todo.md`](tasks/todo.md).
 - ✅ Cross-platform CI (Windows/macOS/Linux × Node 20 + current LTS; typecheck/lint/build/test+coverage)
 - ✅ Dockerfile + hosted HTTP deploy docs (reverse-proxy TLS)
 - ✅ Configuration reference + client-agnostic local (stdio) setup docs
+- ⬜ Human verification of a real on-prem call — see [`docs/verification-runbook.md`](docs/verification-runbook.md)
 
 ## License
 
