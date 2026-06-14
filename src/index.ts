@@ -1,6 +1,13 @@
 #!/usr/bin/env node
+import { Agent, setGlobalDispatcher } from "undici";
 import { parseArgs } from "node:util";
 import { loadConfig } from "./config.js";
+
+// Undici (Node.js native fetch) has a 10s connect timeout that is separate
+// from ADO_TIMEOUT_MS and fires before the TLS handshake completes on some
+// corporate servers. Raise it to 60s so slow internal ADO hosts don't get
+// cut off before the connection is established.
+setGlobalDispatcher(new Agent({ connectTimeout: 60_000 }));
 import { createLogger } from "./logger.js";
 import { createToolDeps } from "./context.js";
 import { DomainsManager } from "./shared/domains.js";
