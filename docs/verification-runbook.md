@@ -6,7 +6,7 @@ the three remaining checkpoints on **Windows, macOS, and Linux**:
 
 | Checkpoint | Proves | Needs |
 |---|---|---|
-| **B** | A real authenticated ADO call works over **stdio** (auth header + api-version + connectivity). | Server URL + your PAT |
+| **B** | A real authenticated ADO call works over **stdio** (PAT auth + api-version + connectivity). | Server URL + your PAT |
 | **C** | The **hosted HTTP** transport serves the security gates (`401`/`403`) and answers MCP over the wire. | A built image/host + your PAT |
 | **E** | Final go/no-go: all of the above plus artifacts present. | The two above passing |
 
@@ -161,7 +161,7 @@ curl -i -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3000/mcp \
 # Windows
 curl.exe -i -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:3000/mcp `
   -H "Content-Type: application/json" `
-  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 Expect `401`.
@@ -183,7 +183,7 @@ curl.exe -i -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:3000/mcp `
   -H "Content-Type: application/json" `
   -H "Origin: https://evil.example" `
   -H "X-ADO-PAT: dummy" `
-  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 Expect `403`. (`GET /mcp` → `405`; any other path → `404`.)
@@ -205,7 +205,7 @@ curl.exe -i -s -X POST http://127.0.0.1:3000/mcp `
   -H "Content-Type: application/json" `
   -H "Accept: application/json, text/event-stream" `
   -H "X-ADO-PAT: <your-pat>" `
-  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"runbook\",\"version\":\"1\"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"runbook","version":"1"}}}'
 ```
 
 Expect `200 OK` with a JSON-RPC `result` describing the server's capabilities.
@@ -237,8 +237,8 @@ Checkpoint C's job is to prove the **HTTP transport + security gates**.
 Tick every box; record evidence (command output / screenshots) next to each.
 
 - [ ] **Build is clean** on the target OS: `npm ci && npm run build` succeeds.
-- [ ] **Unit suite green**: `npm test` (and `npm run test:coverage` ≥ 80% on
-      `src/azure` + `src/tools`).
+- [ ] **Unit suite green**: `npm test` (and `npm run test:coverage` — the suite
+      enforces ≥ 80% coverage, with `src/azure` + `src/tools` well above that).
 - [ ] **Checkpoint B passed** — `core_list_projects` returned real projects over
       stdio (record the OS used).
 - [ ] **Checkpoint C passed** — `401` / `403` gates hold and `initialize`
@@ -258,7 +258,7 @@ When all boxes are checked, the server is verified for your environment.
 
 | Platform | Gotcha |
 |---|---|
-| **Windows** | Use `curl.exe` (not `curl`). In PowerShell, JSON in `-d` needs escaped quotes (`\"`) as shown, and line continuation is a backtick `` ` ``. Clear the PAT with `Remove-Item Env:ADO_PAT`. |
+| **Windows** | Use `curl.exe` (not `curl`). In PowerShell, pass JSON to `-d` as a **single-quoted** string (the inner `"` are literal — no `\"` escaping), and line continuation is a backtick `` ` ``. Clear the PAT with `Remove-Item Env:ADO_PAT`. |
 | **macOS** | If `node` isn't found, install an LTS (e.g. via `nvm`/Homebrew). Gatekeeper doesn't affect Node scripts. |
 | **Linux** | Headless boxes: the stdio check needs no display. If `npm ci` can't reach your registry, confirm the `@corp` scope in `.npmrc`. |
 
