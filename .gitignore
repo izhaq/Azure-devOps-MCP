@@ -5,3 +5,5 @@ coverage/
 .env
 .env.local
 .DS_Store
+# Local MCP client config (machine-specific paths + per-user PAT); not for the repo
+.mcp.json
