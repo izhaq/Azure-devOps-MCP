@@ -1,9 +1,9 @@
-# Azure DevOps MCP — First-time environment setup
+# Azure DevOps MCP - First-time environment setup
 # Run this once on any machine where you want to use the MCP server.
 # All settings are saved permanently to your Windows user account.
 
 Write-Host ""
-Write-Host "Azure DevOps MCP — Environment Setup" -ForegroundColor Cyan
+Write-Host "Azure DevOps MCP - Environment Setup" -ForegroundColor Cyan
 Write-Host "--------------------------------------"
 Write-Host "Press Enter to accept the default value shown in [brackets]."
 Write-Host ""
@@ -21,7 +21,7 @@ $collection = Read-WithDefault "Collection name"         "DefaultCollection"
 $apiVersion = Read-WithDefault "API version"             "7.1"
 
 Write-Host ""
-Write-Host "Your PAT (Personal Access Token) — input is hidden." -ForegroundColor Yellow
+Write-Host "Your PAT (Personal Access Token) - input is hidden." -ForegroundColor Yellow
 Write-Host "Create one at: $serverUrl/$collection/_usersSettings/tokens"
 Write-Host ""
 $patSecure = Read-Host "PAT" -AsSecureString
@@ -55,6 +55,6 @@ $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"
 Write-Host ""
 Write-Host "All done! Settings saved permanently for your user account." -ForegroundColor Green
 Write-Host ""
-Write-Host "Next step — test the connection:"
+Write-Host "Next step - run the connection test:"
 Write-Host "  .\scripts\test-connection.ps1" -ForegroundColor White
 Write-Host ""

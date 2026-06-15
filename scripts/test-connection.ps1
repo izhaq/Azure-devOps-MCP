@@ -1,8 +1,8 @@
-# Azure DevOps MCP — Connection smoke test
+# Azure DevOps MCP - Connection smoke test
 # Run this after setup-env.ps1 to confirm the MCP server can reach Azure DevOps.
 
 Write-Host ""
-Write-Host "Azure DevOps MCP — Connection Test" -ForegroundColor Cyan
+Write-Host "Azure DevOps MCP - Connection Test" -ForegroundColor Cyan
 Write-Host "------------------------------------"
 
 # Find dist/index.js relative to this script (works from any working directory)
@@ -66,13 +66,13 @@ if ($raw -match '"error"') {
         Write-Host "      $raw"
     }
     Write-Host ""
-    Write-Host "If the message says 'Unauthorized' — your PAT has expired or has"
+    Write-Host "If the message says 'Unauthorized' - your PAT has expired or has"
     Write-Host "insufficient permissions. Create a new one and re-run setup-env.ps1."
     Write-Host ""
     exit 1
 }
 
-# Success — print the project list
+# Success - print the project list
 Write-Host ""
 Write-Host "SUCCESS  Connected to Azure DevOps!" -ForegroundColor Green
 Write-Host ""
@@ -89,6 +89,6 @@ try {
 }
 
 Write-Host ""
-Write-Host "Next step — configure your AI tool to use this MCP server."
+Write-Host "Next step - configure your AI tool to use this MCP server."
 Write-Host "See: docs\setup-airgapped-tabnine.md (Step 7)"
 Write-Host ""
