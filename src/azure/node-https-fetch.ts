@@ -19,7 +19,7 @@ import * as http from "node:http";
  *   automatically because Node's tls stack reads those env vars at runtime.
  */
 export function createNodeHttpsFetch(): typeof fetch {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  return async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(
       typeof input === "string"
         ? input
