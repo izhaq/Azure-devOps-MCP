@@ -9,9 +9,12 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   dts: false,
-  // undici is Node's built-in fetch implementation; mark external so esbuild
-  // doesn't try to bundle it (it ships with Node ≥ 18).
-  external: ["undici"],
+  // Bundle ALL dependencies into dist/index.js so the output is self-contained:
+  // no node_modules folder needed at runtime. This is required for air-gapped
+  // deployments where the only transfer mechanism is git bundle (which excludes
+  // node_modules). noExternal overrides tsup's default of leaving node packages
+  // external on platform:node.
+  noExternal: [/.*/],
   // Preserve the shebang in src/index.ts so the bin is directly executable.
   banner: { js: "" },
 });
