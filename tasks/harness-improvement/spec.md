@@ -79,8 +79,11 @@ existing low-level tools.
 - **`@modelcontextprotocol/sdk`** (`McpServer`, stdio + Streamable HTTP transports).
 - **zod** for env + tool input validation.
 - **Native `fetch`** (`AzureDevOpsClient` uses the global `fetch`, injectable as `fetchImpl`).
-  There is **no `undici` dependency** — the only runtime deps are `@modelcontextprotocol/sdk`
-  and `zod`. (An earlier draft listed `undici`; that was incorrect.)
+  Node's `fetch` is backed by **undici**, which is now a **declared direct dependency** —
+  added (commit `0ec09f8`) to raise undici's 10s TCP/TLS connect timeout to 60s, after a live
+  on-prem run failed the corporate TLS handshake with a generic `fetch failed`. (An earlier
+  draft listed `undici` as a fetch-tuning dep; that turned out correct, just for this reason.)
+  Runtime deps are therefore `@modelcontextprotocol/sdk`, `zod`, and `undici`.
 - REST against on-prem Azure DevOps Server, `api-version` 7.1 (configurable), PAT via HTTP Basic.
 
 ### Deployment note (air-gapped transfer)
