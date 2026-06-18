@@ -1,8 +1,62 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
+import { boundLimit } from "../azure/client.js";
 import { toPreviewVersion } from "../shared/api-version.js";
-import { asText } from "./_shared.js";
+import { buildWorkItemQuery } from "../shared/wiql.js";
+import { asText, asCompactText, asTicketList, truncateField } from "./_shared.js";
+
+/** Compact projection for the task-level list path — excludes the heavy HTML description. */
+const LIST_FIELDS = [
+  "System.Id",
+  "System.Title",
+  "System.State",
+  "System.AssignedTo",
+  "System.WorkItemType",
+];
+
+/** Truncate `System.Description` (raw HTML) in the detail path; see Defect 1. */
+const MAX_DESCRIPTION_CHARS = 2000;
+/** If a single serialized work item still exceeds this, return a marker instead of dumping it. */
+const MAX_INLINE_ITEM_BYTES = 50_000;
+/** If even the thin list exceeds this, tell the model to narrow its filter. */
+const MAX_LIST_BYTES = 50_000;
+
+/**
+ * Format a single work item for the detail path: truncate the raw HTML
+ * description (per decision, no HTML→markdown conversion), then emit compact
+ * JSON. If the item is still oversized, return a short actionable message
+ * rather than blowing the model's context window.
+ */
+function formatWorkItemDetail(item: unknown): {
+  content: Array<{ type: "text"; text: string }>;
+} {
+  let shaped = item;
+  if (item && typeof item === "object" && "fields" in item) {
+    const original = (item as { fields?: Record<string, unknown> }).fields ?? {};
+    const fields = { ...original };
+    if (typeof fields["System.Description"] === "string") {
+      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+    }
+    shaped = { ...(item as object), fields };
+  }
+  const text = JSON.stringify(shaped);
+  if (text.length > MAX_INLINE_ITEM_BYTES) {
+    const id = (item as { id?: number } | null)?.id;
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `Work item ${id ?? "?"} is too large to return inline (${text.length} bytes). ` +
+            `Re-fetch only the fields you need via wit_get's "fields" argument, ` +
+            `e.g. ["System.Title","System.State","System.AssignedTo"].`,
+        },
+      ],
+    };
+  }
+  return asCompactText(shaped);
+}
 
 /**
  * work-items domain: query, read, create, update, comment, and type metadata.
@@ -53,12 +107,120 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     },
     async ({ query, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      // Cap like every other list tool: an unbounded WIQL can return thousands
+      // of references and overflow a small model's context. boundLimit applies
+      // min(top ?? maxResults, maxResults) so $top is always set.
+      const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.post(
         "/_apis/wit/wiql",
         { query },
-        { project, query: top ? { $top: top } : undefined },
+        { project, query: { $top: cap } },
       );
       return asText(result);
+    },
+  );
+
+  server.registerTool(
+    "wit_list_my_work_items",
+    {
+      description:
+        "List work items assigned to you (default) or to a named teammate, as a compact " +
+        "one-line-per-ticket summary. Composes the query, identity matching, and field " +
+        "projection server-side so you never write WIQL or fetch items one-by-one. Defaults " +
+        "to open items; pass state='all' or an explicit state set to change that.",
+      inputSchema: {
+        mine: z
+          .boolean()
+          .optional()
+          .describe("Only your own items (default true unless assignedTo is given)"),
+        assignedTo: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Assignee display name to match (resolved server-side; substring match)"),
+        state: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("State filter: 'open' (default), 'all', or a comma-separated set e.g. 'Active,New'"),
+        titleContains: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Substring to match in the title"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project to scope to; omit for collection-wide"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)"),
+      },
+    },
+    async ({ mine, assignedTo, state, titleContains, project, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+
+      // "Mine" unless an explicit assignee is named. For a named teammate, try
+      // to resolve to the server's canonical display name (best-effort) and
+      // match by substring — robust to bilingual strings and the on-prem
+      // "Display Name <unique>" storage format; falls back to the raw input.
+      const useMine = assignedTo ? false : (mine ?? true);
+      let assignedToOpt: { value: string; match: "contains" } | undefined;
+      if (!useMine && assignedTo) {
+        const canonical = await client.resolveIdentity(assignedTo);
+        assignedToOpt = { value: canonical ?? assignedTo, match: "contains" };
+      }
+
+      let states: string[] | undefined;
+      let allStates = false;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+
+      const wiql = buildWorkItemQuery({
+        mine: useMine,
+        assignedTo: assignedToOpt,
+        states,
+        allStates,
+        titleContains,
+      });
+
+      const result = await client.post<{ workItems?: Array<{ id: number }> }>(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project, query: { $top: cap } },
+      );
+      const refs = result?.workItems ?? [];
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+
+      const items = await client.workItemsBatch<{ id?: number; fields?: Record<string, unknown> }>(
+        ids,
+        LIST_FIELDS,
+      );
+      const listed = asTicketList(items, { total: refs.length });
+      // List-path size-guard: even a thin list can be large with long titles.
+      if ((listed.content[0]?.text.length ?? 0) > MAX_LIST_BYTES) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Result set is too large to return inline (${items.length} items). ` +
+                `Narrow your filter (state, assignedTo, titleContains) or lower "top".`,
+            },
+          ],
+        };
+      }
+      return listed;
     },
   );
 
@@ -91,7 +253,9 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
           $expand: expand,
         },
       });
-      return asText(item);
+      // Detail path: truncate the raw HTML description and emit compact JSON,
+      // with an oversize fallback. Keeps a heavy work item from overflowing.
+      return formatWorkItemDetail(item);
     },
   );
 

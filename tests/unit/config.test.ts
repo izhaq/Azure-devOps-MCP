@@ -11,6 +11,7 @@ describe("loadConfig", () => {
     expect(cfg.apiVersion).toBe("7.1");
     expect(cfg.pageSize).toBe(50);
     expect(cfg.maxResults).toBe(200);
+    expect(cfg.agentListCap).toBe(25);
     expect(cfg.timeoutMs).toBe(30000);
     expect(cfg.httpHost).toBe("127.0.0.1");
     expect(cfg.httpPort).toBe(3000);
@@ -23,6 +24,10 @@ describe("loadConfig", () => {
     expect(cfg.pageSize).toBe(10);
     expect(cfg.maxResults).toBe(25);
     expect(cfg.httpPort).toBe(8080);
+  });
+
+  it("reads ADO_AGENT_LIST_CAP", () => {
+    expect(loadConfig({ ...base, ADO_AGENT_LIST_CAP: "10" }).agentListCap).toBe(10);
   });
 
   it("parses a comma-separated domains list, trimming whitespace", () => {

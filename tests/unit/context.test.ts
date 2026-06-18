@@ -13,6 +13,7 @@ const config: ServerConfig = {
   httpPort: 3000,
   pageSize: 50,
   maxResults: 200,
+  agentListCap: 25,
   timeoutMs: 30000,
   logLevel: "info",
 };

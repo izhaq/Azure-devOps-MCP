@@ -26,6 +26,7 @@ const config: ServerConfig = {
   httpPort: 3000,
   pageSize: 50,
   maxResults: 200,
+  agentListCap: 25,
   timeoutMs: 30000,
   logLevel: "error",
 };
@@ -67,6 +68,7 @@ function setup(responseBody?: unknown) {
 
 const TOOLS = [
   "wit_query",
+  "wit_list_my_work_items",
   "wit_get",
   "wit_create",
   "wit_update",
@@ -92,6 +94,23 @@ describe("configureWorkItemsTools", () => {
     const { calls, tools } = setup({ workItems: [] });
     await tools.get("wit_query")!({ query: "SELECT [System.Id] FROM workitems", top: 25 }, {});
     expect(calls[0]!.url).toContain("%24top=25");
+  });
+
+  it("wit_query caps at maxResults when no top is given", async () => {
+    const { calls, tools } = setup({ workItems: [] });
+    await tools.get("wit_query")!({ query: "SELECT [System.Id] FROM workitems" }, {});
+    expect(calls[0]!.url).toContain("%24top=200");
+  });
+
+  it("wit_get truncates a long System.Description and returns compact JSON", async () => {
+    const longHtml = `<p>${"x".repeat(5000)}</p>`;
+    const { tools } = setup({ id: 7, fields: { "System.Description": longHtml, "System.Title": "T" } });
+    const res = (await tools.get("wit_get")!({ id: 7 }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    expect(res.content[0]!.text).toContain("truncated");
+    expect(res.content[0]!.text.length).toBeLessThan(longHtml.length);
+    expect(res.content[0]!.text).not.toContain("\n  "); // compact, not pretty-printed
   });
 
   it("wit_get reads a single work item by id", async () => {
@@ -169,5 +188,108 @@ describe("configureWorkItemsTools", () => {
     const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };
     await tools.get("wit_get")!({ id: 1 }, extra);
     expect(calls[0]!.auth).toBe(`Basic ${Buffer.from(":req-pat").toString("base64")}`);
+  });
+});
+
+/** Fetch that returns a different body per endpoint, recording each call. */
+function routedSetup(routes: (url: string) => unknown) {
+  const calls: Call[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    calls.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      auth: headers?.["Authorization"] ?? "",
+      contentType: headers?.["Content-Type"] ?? "",
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    });
+    return new Response(JSON.stringify(routes(String(url))), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  const { server, tools } = fakeServer();
+  configureWorkItemsTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+  return { calls, tools };
+}
+
+const defaultRoutes = (url: string): unknown => {
+  if (url.includes("workitemsbatch"))
+    return {
+      value: [
+        {
+          id: 1,
+          fields: {
+            "System.Id": 1,
+            "System.Title": "Fix login",
+            "System.State": "Active",
+            "System.WorkItemType": "Bug",
+            "System.AssignedTo": { displayName: "Me Myself" },
+          },
+        },
+      ],
+    };
+  if (url.includes("/_apis/identities")) return { value: [{ providerDisplayName: "Canonical Name" }] };
+  if (url.includes("/wiql")) return { workItems: [{ id: 1 }] };
+  return {};
+};
+
+function wiqlOf(calls: Call[]): string {
+  const call = calls.find((c) => c.url.includes("/wiql"));
+  return (call!.body as { query: string }).query;
+}
+
+describe("wit_list_my_work_items", () => {
+  it("defaults to @Me + open states, composes wiql→batch, returns a compact list", async () => {
+    const { calls, tools } = routedSetup(defaultRoutes);
+    const res = (await tools.get("wit_list_my_work_items")!({ project: "Proj" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const wiql = wiqlOf(calls);
+    expect(wiql).toContain("[System.AssignedTo] = @Me");
+    expect(wiql).toContain("[System.State] NOT IN");
+    expect(wiql).not.toContain("System.Description");
+
+    const batch = calls.find((c) => c.url.includes("workitemsbatch"))!;
+    expect(batch.method).toBe("POST");
+    expect((batch.body as { ids: number[] }).ids).toEqual([1]);
+    expect((batch.body as { fields: string[] }).fields).not.toContain("System.Description");
+
+    expect(res.content[0]!.text).toContain("Showing 1 work item");
+    expect(res.content[0]!.text).toContain("#1 [Bug] Fix login — Active · Me Myself");
+  });
+
+  it("resolves a named assignee then matches with CONTAINS (not @Me)", async () => {
+    const { calls, tools } = routedSetup(defaultRoutes);
+    await tools.get("wit_list_my_work_items")!({ assignedTo: "John" }, {});
+    const idCall = calls.find((c) => c.url.includes("/_apis/identities"))!;
+    expect(idCall.url).toContain("filterValue=John");
+    const wiql = wiqlOf(calls);
+    expect(wiql).toContain("[System.AssignedTo] CONTAINS 'Canonical Name'");
+    expect(wiql).not.toContain("@Me");
+  });
+
+  it("state='all' omits the state filter", async () => {
+    const { calls, tools } = routedSetup(defaultRoutes);
+    await tools.get("wit_list_my_work_items")!({ state: "all" }, {});
+    expect(wiqlOf(calls)).not.toContain("[System.State]");
+  });
+
+  it("returns 'Showing 0' and skips the batch call when nothing matches", async () => {
+    const { calls, tools } = routedSetup((url) =>
+      url.includes("/wiql") ? { workItems: [] } : {},
+    );
+    const res = (await tools.get("wit_list_my_work_items")!({}, {})) as {
+      content: Array<{ text: string }>;
+    };
+    expect(res.content[0]!.text).toContain("Showing 0 work items");
+    expect(calls.some((c) => c.url.includes("workitemsbatch"))).toBe(false);
+  });
+
+  it("caps ids at ADO_AGENT_LIST_CAP via $top", async () => {
+    const { calls, tools } = routedSetup(defaultRoutes);
+    await tools.get("wit_list_my_work_items")!({}, {});
+    const wiqlCall = calls.find((c) => c.url.includes("/wiql"))!;
+    expect(wiqlCall.url).toContain("%24top=25"); // default agentListCap
   });
 });

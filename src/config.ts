@@ -16,6 +16,13 @@ export interface ServerConfig {
   tlsKey?: string;
   pageSize: number;
   maxResults: number;
+  /**
+   * Default cap for the agent-facing task-level list tools (e.g.
+   * `wit_list_my_work_items`). Smaller than `maxResults` so a small-context
+   * model isn't flooded; still hard-bounded by `maxResults`. Tunable via
+   * `ADO_AGENT_LIST_CAP` without a rebuild (important for air-gapped deploys).
+   */
+  agentListCap: number;
   timeoutMs: number;
   logLevel: LogLevel;
 }
@@ -65,6 +72,7 @@ const schema = z.object({
   ADO_TLS_KEY: z.string().optional(),
   ADO_PAGE_SIZE: port("ADO_PAGE_SIZE").default(50),
   ADO_MAX_RESULTS: port("ADO_MAX_RESULTS").default(200),
+  ADO_AGENT_LIST_CAP: port("ADO_AGENT_LIST_CAP").default(25),
   ADO_TIMEOUT_MS: port("ADO_TIMEOUT_MS").default(30000),
   ADO_LOG_LEVEL: z
     .enum(["debug", "info", "warn", "error"], { message: "invalid log level" })
@@ -98,6 +106,7 @@ export function loadConfig(env: Env = process.env): ServerConfig {
     tlsKey: v.ADO_TLS_KEY,
     pageSize: v.ADO_PAGE_SIZE,
     maxResults: v.ADO_MAX_RESULTS,
+    agentListCap: v.ADO_AGENT_LIST_CAP,
     timeoutMs: v.ADO_TIMEOUT_MS,
     logLevel: v.ADO_LOG_LEVEL,
   };
