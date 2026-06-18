@@ -21429,6 +21429,7 @@ var schema = external_exports.object({
   ADO_TLS_KEY: external_exports.string().optional(),
   ADO_PAGE_SIZE: port("ADO_PAGE_SIZE").default(50),
   ADO_MAX_RESULTS: port("ADO_MAX_RESULTS").default(200),
+  ADO_AGENT_LIST_CAP: port("ADO_AGENT_LIST_CAP").default(25),
   ADO_TIMEOUT_MS: port("ADO_TIMEOUT_MS").default(3e4),
   ADO_LOG_LEVEL: external_exports.enum(["debug", "info", "warn", "error"], { message: "invalid log level" }).default("info")
 });
@@ -21453,6 +21454,7 @@ function loadConfig(env = process.env) {
     tlsKey: v.ADO_TLS_KEY,
     pageSize: v.ADO_PAGE_SIZE,
     maxResults: v.ADO_MAX_RESULTS,
+    agentListCap: v.ADO_AGENT_LIST_CAP,
     timeoutMs: v.ADO_TIMEOUT_MS,
     logLevel: v.ADO_LOG_LEVEL
   };
@@ -21600,6 +21602,53 @@ var AzureDevOpsClient = class {
       if (page.length === 0 || continuationToken === previousToken) break;
     } while (continuationToken);
     return items;
+  }
+  /**
+   * Fetch a projection of many work items in one call via
+   * `POST /_apis/wit/workitemsbatch`. `fields` is an explicit allow-list and
+   * deliberately excludes `System.Description` so list output stays compact;
+   * `fields` and `$expand=relations` are mutually exclusive server-side, and a
+   * thin list never needs relations. Ids beyond ADO's 200-per-batch limit are
+   * chunked transparently and the results concatenated in order.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch
+   */
+  async workItemsBatch(ids, fields) {
+    const out = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      if (chunk.length === 0) continue;
+      const body = await this.post("/_apis/wit/workitemsbatch", {
+        ids: chunk,
+        fields
+      });
+      out.push(...body?.value ?? []);
+    }
+    return out;
+  }
+  /**
+   * Best-effort resolution of a display name to the server's canonical identity
+   * display name, so a caller can match `System.AssignedTo` using the server's
+   * own spelling rather than whatever (possibly bilingual) string the model
+   * typed. Returns `undefined` on no match or any error — callers fall back to
+   * matching the raw input, so identity resolution never breaks the tool.
+   *
+   * NOTE (on-prem — verify live): the identity search route/version varies by
+   * Azure DevOps Server build; this uses the classic Identities read endpoint.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/ims/identities/read-identities
+   */
+  async resolveIdentity(name) {
+    try {
+      const result = await this.get(
+        "/_apis/identities",
+        { query: { searchFilter: "General", filterValue: name } }
+      );
+      const first = result?.value?.[0];
+      if (!first) return void 0;
+      const display = first["providerDisplayName"] ?? first["displayName"];
+      return display && display.length > 0 ? display : void 0;
+    } catch {
+      return void 0;
+    }
   }
   async request(method, path, body, options, contentType) {
     const { body: parsed } = await this.requestRaw(method, path, body, options, contentType);
@@ -31271,8 +31320,43 @@ function toPreviewVersion(version2, revision) {
 function toRefName(branch) {
   return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
 }
+function textResult(text) {
+  return { content: [{ type: "text", text }] };
+}
 function asText(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  return textResult(JSON.stringify(data, null, 2));
+}
+function asCompactText(data) {
+  return textResult(JSON.stringify(data));
+}
+function truncateField(value, max) {
+  if (typeof value !== "string" || value.length <= max) return value;
+  const dropped = value.length - max;
+  return `${value.slice(0, max)} \u2026[truncated ${dropped} chars]`;
+}
+function identityName(value) {
+  if (!value) return "Unassigned";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const v = value;
+    return v.displayName ?? v.uniqueName ?? "Unassigned";
+  }
+  return String(value);
+}
+function asTicketList(items, meta3) {
+  const shown = items.length;
+  const total = meta3?.total ?? shown;
+  const header = total > shown ? `Showing ${shown} of ${total} work items \u2014 refine your filter or raise "top" to see more.` : `Showing ${shown} work item${shown === 1 ? "" : "s"}.`;
+  const lines = items.map((item) => {
+    const f = item.fields ?? {};
+    const id = item.id ?? f["System.Id"] ?? "?";
+    const type = f["System.WorkItemType"] ?? "WorkItem";
+    const title = f["System.Title"] ?? "(no title)";
+    const state = f["System.State"] ?? "?";
+    const assignee = identityName(f["System.AssignedTo"]);
+    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}`;
+  });
+  return textResult([header, ...lines].join("\n"));
 }
 
 // src/tools/core.ts
@@ -31313,7 +31397,68 @@ function configureCoreTools(server, deps) {
   );
 }
 
+// src/shared/wiql.ts
+var DEFAULT_CLOSED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
+function quote(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function buildWorkItemQuery(options = {}) {
+  const conditions = [];
+  if (options.mine) {
+    conditions.push("[System.AssignedTo] = @Me");
+  } else if (options.assignedTo) {
+    const op = options.assignedTo.match === "equals" ? "=" : "CONTAINS";
+    conditions.push(`[System.AssignedTo] ${op} ${quote(options.assignedTo.value)}`);
+  }
+  if (!options.allStates) {
+    if (options.states && options.states.length > 0) {
+      conditions.push(`[System.State] IN (${options.states.map(quote).join(", ")})`);
+    } else {
+      conditions.push(`[System.State] NOT IN (${DEFAULT_CLOSED_STATES.map(quote).join(", ")})`);
+    }
+  }
+  if (options.titleContains) {
+    conditions.push(`[System.Title] CONTAINS ${quote(options.titleContains)}`);
+  }
+  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  return `SELECT [System.Id] FROM WorkItems${where} ORDER BY [System.ChangedDate] DESC`;
+}
+
 // src/tools/work-items.ts
+var LIST_FIELDS = [
+  "System.Id",
+  "System.Title",
+  "System.State",
+  "System.AssignedTo",
+  "System.WorkItemType"
+];
+var MAX_DESCRIPTION_CHARS = 2e3;
+var MAX_INLINE_ITEM_BYTES = 5e4;
+var MAX_LIST_BYTES = 5e4;
+function formatWorkItemDetail(item) {
+  let shaped = item;
+  if (item && typeof item === "object" && "fields" in item) {
+    const original = item.fields ?? {};
+    const fields = { ...original };
+    if (typeof fields["System.Description"] === "string") {
+      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+    }
+    shaped = { ...item, fields };
+  }
+  const text = JSON.stringify(shaped);
+  if (text.length > MAX_INLINE_ITEM_BYTES) {
+    const id = item?.id;
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Work item ${id ?? "?"} is too large to return inline (${text.length} bytes). Re-fetch only the fields you need via wit_get's "fields" argument, e.g. ["System.Title","System.State","System.AssignedTo"].`
+        }
+      ]
+    };
+  }
+  return asCompactText(shaped);
+}
 var JSON_PATCH = "application/json-patch+json";
 function fieldsToPatch(fields) {
   return Object.entries(fields).map(([name, value]) => ({
@@ -31335,12 +31480,76 @@ function configureWorkItemsTools(server, deps) {
     },
     async ({ query, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.post(
         "/_apis/wit/wiql",
         { query },
-        { project, query: top ? { $top: top } : void 0 }
+        { project, query: { $top: cap } }
       );
       return asText(result);
+    }
+  );
+  server.registerTool(
+    "wit_list_my_work_items",
+    {
+      description: "List work items assigned to you (default) or to a named teammate, as a compact one-line-per-ticket summary. Composes the query, identity matching, and field projection server-side so you never write WIQL or fetch items one-by-one. Defaults to open items; pass state='all' or an explicit state set to change that.",
+      inputSchema: {
+        mine: external_exports.boolean().optional().describe("Only your own items (default true unless assignedTo is given)"),
+        assignedTo: external_exports.string().min(1).optional().describe("Assignee display name to match (resolved server-side; substring match)"),
+        state: external_exports.string().min(1).optional().describe("State filter: 'open' (default), 'all', or a comma-separated set e.g. 'Active,New'"),
+        titleContains: external_exports.string().min(1).optional().describe("Substring to match in the title"),
+        project: external_exports.string().min(1).optional().describe("Project to scope to; omit for collection-wide"),
+        top: external_exports.number().int().positive().optional().describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)")
+      }
+    },
+    async ({ mine, assignedTo, state, titleContains, project, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const useMine = assignedTo ? false : mine ?? true;
+      let assignedToOpt;
+      if (!useMine && assignedTo) {
+        const canonical = await client.resolveIdentity(assignedTo);
+        assignedToOpt = { value: canonical ?? assignedTo, match: "contains" };
+      }
+      let states;
+      let allStates = false;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      const wiql = buildWorkItemQuery({
+        mine: useMine,
+        assignedTo: assignedToOpt,
+        states,
+        allStates,
+        titleContains
+      });
+      const result = await client.post(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project, query: { $top: cap } }
+      );
+      const refs = result?.workItems ?? [];
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+      const items = await client.workItemsBatch(
+        ids,
+        LIST_FIELDS
+      );
+      const listed = asTicketList(items, { total: refs.length });
+      if ((listed.content[0]?.text.length ?? 0) > MAX_LIST_BYTES) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Result set is too large to return inline (${items.length} items). Narrow your filter (state, assignedTo, titleContains) or lower "top".`
+            }
+          ]
+        };
+      }
+      return listed;
     }
   );
   server.registerTool(
@@ -31364,7 +31573,7 @@ function configureWorkItemsTools(server, deps) {
           $expand: expand
         }
       });
-      return asText(item);
+      return formatWorkItemDetail(item);
     }
   );
   server.registerTool(

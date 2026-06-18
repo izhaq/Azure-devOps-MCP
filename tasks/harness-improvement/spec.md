@@ -78,21 +78,25 @@ existing low-level tools.
 - **TypeScript / Node ≥ 20** (Dockerfile floor Node 22).
 - **`@modelcontextprotocol/sdk`** (`McpServer`, stdio + Streamable HTTP transports).
 - **zod** for env + tool input validation.
-- **Native `fetch`** (`AzureDevOpsClient` uses the global `fetch`, injectable as `fetchImpl`).
-  Node's `fetch` is backed by **undici**, which is now a **declared direct dependency** —
-  added (commit `0ec09f8`) to raise undici's 10s TCP/TLS connect timeout to 60s, after a live
-  on-prem run failed the corporate TLS handshake with a generic `fetch failed`. (An earlier
-  draft listed `undici` as a fetch-tuning dep; that turned out correct, just for this reason.)
-  Runtime deps are therefore `@modelcontextprotocol/sdk`, `zod`, and `undici`.
+- **Custom `fetch` over Node's built-in `https`/`http`** (`src/azure/node-https-fetch.ts`),
+  injected as `fetchImpl`. The history: a live on-prem run failed the corporate TLS handshake
+  with a generic `fetch failed`, traced to undici's hard 10s connect timeout (PR #20 raised it
+  via `setGlobalDispatcher`). PR #21 then **removed `undici`** entirely — it is CommonJS and
+  broke ESM bundling (`Dynamic require of "assert"`) — and replaced it with a built-in fetch
+  that has no internal connect limit and honours `NODE_EXTRA_CA_CERTS` /
+  `NODE_TLS_REJECT_UNAUTHORIZED`. Runtime deps are now just `@modelcontextprotocol/sdk` + `zod`,
+  and even those are bundled (below).
 - REST against on-prem Azure DevOps Server, `api-version` 7.1 (configurable), PAT via HTTP Basic.
 
-### Deployment note (air-gapped transfer)
+### Deployment (air-gapped transfer) — settled by PR #21
 
-`tsup` does **not** bundle dependencies into `dist/index.js` (verified: running `dist/` without
-`node_modules` fails with `Cannot find package 'zod'`). For the air-gapped copy you must either:
-- ship `dist/` **plus the production `node_modules`**, or
-- add `noExternal` to `tsup.config.ts` so the deps bundle into the single file (recommended —
-  simplifies the transfer to one artifact).
+`tsup` now bundles **all** dependencies (`noExternal: [/.*/]`) into a single self-contained
+`dist/index.js` (~1.16 MB; only Node built-ins stay external), and that file is **committed to
+the repo** (`.gitignore` tracks `dist/index.js`, ignores only `dist/*.map`). The air-gapped
+transfer is therefore a `git bundle` → `git clone` → `node dist/index.js --stdio`, needing only
+Node ≥ 20 — no `npm install`, no `node_modules`. **Implication for this track:** any source
+change must be followed by `npm run build` and a commit of the regenerated `dist/index.js`, or
+the new behaviour won't reach the air-gapped deploy.
 
 ## Commands (confirmed)
 
