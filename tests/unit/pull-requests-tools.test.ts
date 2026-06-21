@@ -106,7 +106,15 @@ function routedSetup(routes: (url: string, method: string) => unknown) {
   return { calls, tools };
 }
 
-const TOOLS = ["pr_list", "pr_get", "pr_list_threads", "pr_create", "pr_add_comment", "pr_update_status"];
+const TOOLS = [
+  "pr_list",
+  "pr_get",
+  "pr_list_threads",
+  "pr_create",
+  "pr_add_comment",
+  "pr_update_status",
+  "pr_list_mine",
+];
 
 describe("configurePullRequestTools", () => {
   it("registers all pull request tools", () => {
@@ -267,6 +275,69 @@ describe("configurePullRequestTools", () => {
       title: "Add x",
       description: "why",
     });
+  });
+
+  it("pr_create resolves reviewer names to identity ids and adds them to the body", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      if (url.includes("/_apis/identities")) return { value: [{ id: "rev-guid-1" }] };
+      if (method === "POST") return { pullRequestId: 9 };
+      return {};
+    });
+    await tools.get("pr_create")!(
+      {
+        repositoryId: "repo1",
+        sourceBranch: "feature/x",
+        targetBranch: "main",
+        title: "Add x",
+        reviewers: ["Alice Smith"],
+      },
+      {},
+    );
+    const idCall = calls.find((c) => c.url.includes("/_apis/identities"))!;
+    expect(idCall.url).toContain("filterValue=Alice");
+    const post = calls.find((c) => c.method === "POST")!;
+    expect((post.body as { reviewers?: unknown }).reviewers).toEqual([{ id: "rev-guid-1" }]);
+  });
+
+  it("pr_create skips unresolved reviewers and omits reviewers from the body", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      if (url.includes("/_apis/identities")) return { value: [] };
+      if (method === "POST") return { pullRequestId: 9 };
+      return {};
+    });
+    await tools.get("pr_create")!(
+      {
+        repositoryId: "repo1",
+        sourceBranch: "feature/x",
+        targetBranch: "main",
+        title: "Add x",
+        reviewers: ["Ghost User"],
+      },
+      {},
+    );
+    const post = calls.find((c) => c.method === "POST")!;
+    expect(post.body).not.toHaveProperty("reviewers");
+  });
+
+  it("pr_list_mine resolves the current user and filters by creatorId", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/profile/profiles/me")) return { id: "me-guid" };
+      return { value: [{ pullRequestId: 1 }] };
+    });
+    await tools.get("pr_list_mine")!({ project: "Proj" }, {});
+    const listCall = calls.find((c) => c.url.includes("/_apis/git/pullrequests"))!;
+    expect(listCall.url).toContain("searchCriteria.status=active");
+    expect(listCall.url).toContain("searchCriteria.creatorId=me-guid");
+  });
+
+  it("pr_list_mine still lists PRs when the profile id cannot be resolved", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/profile/profiles/me")) return {};
+      return { value: [{ pullRequestId: 1 }] };
+    });
+    await tools.get("pr_list_mine")!({ project: "Proj" }, {});
+    const listCall = calls.find((c) => c.url.includes("/_apis/git/pullrequests"))!;
+    expect(listCall.url).not.toContain("creatorId");
   });
 
   it("pr_add_comment POSTs a new thread with the comment text", async () => {

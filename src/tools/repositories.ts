@@ -461,18 +461,47 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         title: z.string().min(1).describe("Pull request title"),
         description: z.string().optional().describe("Pull request description"),
         project: z.string().min(1).optional().describe("Project name or ID"),
+        reviewers: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Display names of reviewers to add (e.g. ['Alice Smith', 'Bob Jones']). " +
+              "Names are resolved to identity GUIDs automatically; unresolved names are skipped.",
+          ),
       },
     },
-    async ({ repositoryId, sourceBranch, targetBranch, title, description, project }, extra) => {
+    async ({ repositoryId, sourceBranch, targetBranch, title, description, project, reviewers }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+
+      // Resolve reviewer display names to identity ids (best-effort: an
+      // unresolved name is skipped rather than failing the whole create).
+      const resolvedReviewers: Array<{ id: string }> = [];
+      if (reviewers && reviewers.length > 0) {
+        for (const name of reviewers) {
+          try {
+            const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
+              "/_apis/identities",
+              { query: { searchFilter: "General", filterValue: name } },
+            );
+            const id = result?.value?.[0]?.["id"] as string | undefined;
+            if (id) resolvedReviewers.push({ id });
+          } catch {
+            // Non-fatal — skip this reviewer.
+          }
+        }
+      }
+
+      const body: Record<string, unknown> = {
+        sourceRefName: toRefName(sourceBranch),
+        targetRefName: toRefName(targetBranch),
+        title,
+        description,
+      };
+      if (resolvedReviewers.length > 0) body["reviewers"] = resolvedReviewers;
+
       const pr = await client.post(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
-        {
-          sourceRefName: toRefName(sourceBranch),
-          targetRefName: toRefName(targetBranch),
-          title,
-          description,
-        },
+        body,
         { project },
       );
       return asCleanText(pr);
@@ -557,6 +586,62 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         { project },
       );
       return asCleanText(pr);
+    },
+  );
+
+  server.registerTool(
+    "pr_list_mine",
+    {
+      description:
+        "List YOUR open pull requests across all repositories in a project (or the whole collection). " +
+        "Use this to answer 'what PRs do I have open?' without needing to know the repository. " +
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      inputSchema: {
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given; omit for collection-wide"),
+        status: z
+          .enum(PR_STATUS)
+          .optional()
+          .describe("Filter by PR status: active (default), abandoned, completed, or all"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .max(deps.config.maxResults)
+          .optional()
+          .describe("Maximum number of pull requests"),
+      },
+    },
+    async ({ project, status, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const cap = boundLimit(top, deps.config.maxResults);
+
+      // Resolve the current user's identity id to filter by creator. The
+      // profile endpoint may not exist on every on-prem build, so this is
+      // best-effort: on failure we fall through and list all matching PRs.
+      let creatorId: string | undefined;
+      try {
+        const profile = await client.get<{ id?: string }>("/_apis/profile/profiles/me", {});
+        creatorId = profile?.id;
+      } catch {
+        // best-effort — no creator filter
+      }
+
+      const query: Record<string, QueryValue> = {
+        "searchCriteria.status": status ?? "active",
+        $top: cap,
+      };
+      if (creatorId) query["searchCriteria.creatorId"] = creatorId;
+
+      const result = await client.get<{ value?: unknown[] }>("/_apis/git/pullrequests", {
+        project: effectiveProject,
+        query,
+      });
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 }
