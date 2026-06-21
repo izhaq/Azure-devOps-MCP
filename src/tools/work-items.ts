@@ -369,7 +369,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         { project },
         JSON_PATCH,
       );
-      return asCleanText(created);
+      return formatWorkItemDetail(created);
     },
   );
 
@@ -400,7 +400,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         {},
         JSON_PATCH,
       );
-      return asCleanText(updated);
+      return formatWorkItemDetail(updated);
     },
   );
 
@@ -416,12 +416,17 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     },
     async ({ project, id, text }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const comment = await client.post(
+      const STRIP_COMMENT_KEYS = new Set(["renderedText", "reactions", "mentions", "format"]);
+      const comment = (await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) },
-      );
-      return asCleanText(comment);
+      )) as Record<string, unknown>;
+      const slim: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(comment)) {
+        if (!STRIP_COMMENT_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     },
   );
 
@@ -438,7 +443,18 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       const result = await client.get<{ value?: unknown[] }>("/_apis/wit/workitemtypes", {
         project,
       });
-      return asCleanText(result.value ?? []);
+      // Slim to the fields a model needs to pick a type; ADO returns icons,
+      // field lists, transitions, and other noise that's pure token cost here.
+      const slim = (result.value ?? []).map((t) => {
+        const type = t as Record<string, unknown>;
+        return {
+          name: type["name"],
+          referenceName: type["referenceName"],
+          description: type["description"],
+          color: type["color"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 }
