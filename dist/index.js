@@ -31385,6 +31385,10 @@ function cleanAdo(value) {
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
     if (key === "url" && typeof val === "string") continue;
+    if (key.endsWith("RefName") && typeof val === "string" && val.startsWith("refs/heads/")) {
+      result[key] = val.slice("refs/heads/".length);
+      continue;
+    }
     result[key] = cleanAdo(val);
   }
   return result;
@@ -32179,7 +32183,7 @@ function configurePullRequestTools(server, deps) {
   server.registerTool(
     "pr_list_mine",
     {
-      description: "List YOUR open pull requests across all repositories in a project (or the whole collection). Use this to answer 'what PRs do I have open?' without needing to know the repository. Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      description: "List YOUR open pull requests across all repositories in a project (or the whole collection). Use this to answer 'what PRs do I have open?' without needing to know the repository. Falls back to ADO_DEFAULT_PROJECT when no project is given. Falls back to listing all active PRs (not filtered by creator) if your identity cannot be resolved.",
       inputSchema: {
         project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given; omit for collection-wide"),
         status: external_exports.enum(PR_STATUS).optional().describe("Filter by PR status: active (default), abandoned, completed, or all"),

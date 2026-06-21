@@ -51,6 +51,12 @@ export function cleanAdo(value: unknown): unknown {
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
     if (key === "url" && typeof val === "string") continue;
+    // Strip the `refs/heads/` prefix from Git ref name fields so a model sees
+    // "main" rather than "refs/heads/main" in PR source/target branch fields.
+    if (key.endsWith("RefName") && typeof val === "string" && val.startsWith("refs/heads/")) {
+      result[key] = val.slice("refs/heads/".length);
+      continue;
+    }
     result[key] = cleanAdo(val);
   }
   return result;

@@ -595,7 +595,8 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
       description:
         "List YOUR open pull requests across all repositories in a project (or the whole collection). " +
         "Use this to answer 'what PRs do I have open?' without needing to know the repository. " +
-        "Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given. " +
+        "Falls back to listing all active PRs (not filtered by creator) if your identity cannot be resolved.",
       inputSchema: {
         project: z
           .string()

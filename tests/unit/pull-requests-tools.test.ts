@@ -152,6 +152,19 @@ describe("configurePullRequestTools", () => {
     expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/pullrequests/42");
   });
 
+  it("pr_get strips refs/heads/ prefix from sourceRefName and targetRefName", async () => {
+    const { tools } = setup({
+      pullRequestId: 42,
+      sourceRefName: "refs/heads/feature/my-branch",
+      targetRefName: "refs/heads/main",
+    });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as { sourceRefName: string; targetRefName: string };
+    expect(pr.sourceRefName).toBe("feature/my-branch");
+    expect(pr.targetRefName).toBe("main");
+  });
+
   it("pr_get truncates a very long description", async () => {
     const longDesc = "d".repeat(5000);
     const { tools } = setup({ pullRequestId: 42, description: longDesc });
