@@ -31485,7 +31485,14 @@ function configureWorkItemsTools(server, deps) {
         { query },
         { project, query: { $top: cap } }
       );
-      return asText(result);
+      const out = asText(result);
+      if ((result?.workItems?.length ?? 0) >= cap) {
+        out.content.push({
+          type: "text",
+          text: `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be truncated. Add a tighter WHERE clause or adjust "top" to see more.`
+        });
+      }
+      return out;
     }
   );
   server.registerTool(
@@ -31504,7 +31511,7 @@ function configureWorkItemsTools(server, deps) {
     async ({ mine, assignedTo, state, titleContains, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
-      const useMine = assignedTo ? false : mine ?? true;
+      const useMine = mine ?? !assignedTo;
       let assignedToOpt;
       if (!useMine && assignedTo) {
         const canonical = await client.resolveIdentity(assignedTo);
@@ -31540,7 +31547,9 @@ function configureWorkItemsTools(server, deps) {
         ids,
         LIST_FIELDS
       );
-      const listed = asTicketList(items, { total });
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids.map((id) => byId.get(id)).filter((it) => it !== void 0);
+      const listed = asTicketList(ordered, { total });
       const listText = listed.content[0]?.text ?? "";
       if (Buffer.byteLength(listText, "utf8") > MAX_INLINE_RESULT_BYTES) {
         return textResult(

@@ -102,6 +102,25 @@ describe("configureWorkItemsTools", () => {
     expect(calls[0]!.url).toContain("%24top=200");
   });
 
+  it("wit_query appends a 'capped' note when the result fills the cap", async () => {
+    const { tools } = setup({ workItems: [{ id: 1 }, { id: 2 }] });
+    const res = (await tools.get("wit_query")!(
+      { query: "SELECT [System.Id] FROM workitems", top: 2 },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content).toHaveLength(2);
+    expect(res.content[1]!.text).toContain("capped at 2");
+  });
+
+  it("wit_query omits the note when the result is below the cap", async () => {
+    const { tools } = setup({ workItems: [{ id: 1 }] });
+    const res = (await tools.get("wit_query")!(
+      { query: "SELECT [System.Id] FROM workitems", top: 50 },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content).toHaveLength(1);
+  });
+
   it("wit_get truncates a long System.Description and returns compact JSON", async () => {
     const longHtml = `<p>${"x".repeat(5000)}</p>`;
     const { tools } = setup({ id: 7, fields: { "System.Description": longHtml, "System.Title": "T" } });
@@ -280,6 +299,33 @@ describe("wit_list_my_work_items", () => {
     const wiql = wiqlOf(calls);
     expect(wiql).toContain("[System.AssignedTo] CONTAINS 'Jane'");
     expect(wiql).not.toContain("=");
+  });
+
+  it("honors explicit mine:true over assignedTo (mine wins)", async () => {
+    const { calls, tools } = routedSetup(defaultRoutes);
+    await tools.get("wit_list_my_work_items")!({ mine: true, assignedTo: "John" }, {});
+    expect(wiqlOf(calls)).toContain("[System.AssignedTo] = @Me");
+    expect(calls.some((c) => c.url.includes("/_apis/identities"))).toBe(false);
+  });
+
+  it("renders items in the WIQL order, not the batch response order", async () => {
+    const { tools } = routedSetup((url) => {
+      if (url.includes("workitemsbatch"))
+        return {
+          value: [
+            { id: 2, fields: { "System.Title": "two" } },
+            { id: 3, fields: { "System.Title": "three" } },
+            { id: 1, fields: { "System.Title": "one" } },
+          ],
+        };
+      if (url.includes("/wiql")) return { workItems: [{ id: 3 }, { id: 1 }, { id: 2 }] };
+      return {};
+    });
+    const res = (await tools.get("wit_list_my_work_items")!({}, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const lines = res.content[0]!.text.split("\n").slice(1); // drop the count header
+    expect(lines.map((l) => l.match(/^#(\d+)/)![1])).toEqual(["3", "1", "2"]);
   });
 
   it("state='all' omits the state filter", async () => {

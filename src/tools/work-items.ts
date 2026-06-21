@@ -107,12 +107,23 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       // of references and overflow a small model's context. boundLimit applies
       // min(top ?? maxResults, maxResults) so $top is always set.
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.post(
+      const result = await client.post<{ workItems?: unknown[] }>(
         "/_apis/wit/wiql",
         { query },
         { project, query: { $top: cap } },
       );
-      return asText(result);
+      const out = asText(result);
+      // When the result fills the cap, more may have matched: tell the model so
+      // it doesn't mistake a capped page for the complete set.
+      if ((result?.workItems?.length ?? 0) >= cap) {
+        out.content.push({
+          type: "text",
+          text:
+            `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be ` +
+            `truncated. Add a tighter WHERE clause or adjust "top" to see more.`,
+        });
+      }
+      return out;
     },
   );
 
@@ -161,13 +172,15 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
 
-      // "Mine" unless an explicit assignee is named. For a named teammate, try
-      // to resolve to the server's canonical display name (best-effort): when
-      // resolved we match exactly (avoids substring collisions like
-      // "Dan" → "Daniel"); when resolution fails we fall back to a CONTAINS on
-      // the raw input — robust to bilingual strings and the on-prem
-      // "Display Name <unique>" storage format.
-      const useMine = assignedTo ? false : (mine ?? true);
+      // "Mine" unless an explicit assignee is named. An explicit `mine: true`
+      // wins over `assignedTo` (matching buildWorkItemQuery's documented
+      // precedence); `mine` defaults to true only when no assignee is given.
+      // For a named teammate, try to resolve to the server's canonical display
+      // name (best-effort): when resolved we match exactly (avoids substring
+      // collisions like "Dan" → "Daniel"); when resolution fails we fall back
+      // to a CONTAINS on the raw input — robust to bilingual strings and the
+      // on-prem "Display Name <unique>" storage format.
+      const useMine = mine ?? !assignedTo;
       let assignedToOpt: { value: string; match: "contains" | "equals" } | undefined;
       if (!useMine && assignedTo) {
         const canonical = await client.resolveIdentity(assignedTo);
@@ -213,7 +226,14 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         ids,
         LIST_FIELDS,
       );
-      const listed = asTicketList(items, { total });
+      // workitemsbatch does not guarantee it echoes items in requested-id
+      // order, so re-sort back into the WIQL ORDER BY (ChangedDate DESC) order
+      // we asked for; otherwise "the top item" would be arbitrary.
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids
+        .map((id) => byId.get(id))
+        .filter((it): it is NonNullable<typeof it> => it !== undefined);
+      const listed = asTicketList(ordered, { total });
       // List-path size-guard: even a thin list can be large with long titles.
       // Measure UTF-8 bytes to match the repo's size-guard convention.
       const listText = listed.content[0]?.text ?? "";
