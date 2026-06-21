@@ -50,15 +50,24 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
     },
     async ({ project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const slimTeam = (t: unknown) => {
+        const team = t as Record<string, unknown>;
+        return {
+          id: team["id"],
+          name: team["name"],
+          description: team["description"],
+          projectName: team["projectName"],
+        };
+      };
       if (project) {
         const teams = await client.getAll(`/_apis/projects/${encodeURIComponent(project)}/teams`);
-        return asCleanText(teams);
+        return asCleanText(teams.map(slimTeam));
       }
       // Collection-wide listing requires the preview api-version.
       const teams = await client.getAll("/_apis/teams", {
         apiVersion: toPreviewVersion(deps.config.apiVersion, 3),
       });
-      return asCleanText(teams);
+      return asCleanText(teams.map(slimTeam));
     },
   );
 }
