@@ -102,23 +102,73 @@ describe("configureWorkItemsTools", () => {
     expect(calls[0]!.url).toContain("%24top=200");
   });
 
-  it("wit_query appends a 'capped' note when the result fills the cap", async () => {
-    const { tools } = setup({ workItems: [{ id: 1 }, { id: 2 }] });
+  it("wit_query (flat) fetches fields and returns a single-block ticket list", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("workitemsbatch"))
+        return {
+          value: [
+            {
+              id: 1,
+              fields: {
+                "System.Id": 1,
+                "System.Title": "Fix login",
+                "System.State": "Active",
+                "System.WorkItemType": "Bug",
+                "System.AssignedTo": { displayName: "Me Myself" },
+              },
+            },
+          ],
+        };
+      if (url.includes("/wiql")) return { workItems: [{ id: 1 }] };
+      return {};
+    });
     const res = (await tools.get("wit_query")!(
-      { query: "SELECT [System.Id] FROM workitems", top: 2 },
+      { query: "SELECT [System.Id] FROM WorkItems" },
       {},
     )) as { content: Array<{ text: string }> };
-    expect(res.content).toHaveLength(2);
-    expect(res.content[1]!.text).toContain("capped at 2");
+    // Single content block (L10): the cap note is merged into the list header.
+    expect(res.content).toHaveLength(1);
+    const batch = calls.find((c) => c.url.includes("workitemsbatch"))!;
+    expect((batch.body as { ids: number[] }).ids).toEqual([1]);
+    expect(res.content[0]!.text).toContain("#1 [Bug] Fix login — Active · Me Myself");
   });
 
-  it("wit_query omits the note when the result is below the cap", async () => {
-    const { tools } = setup({ workItems: [{ id: 1 }] });
+  it("wit_query (flat) merges the cap into the ticket-list header (no 2nd block)", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({ id: i + 1 }));
+    const { tools } = routedSetup((url) => {
+      if (url.includes("workitemsbatch"))
+        return { value: many.slice(0, 2).map((r) => ({ id: r.id, fields: {} })) };
+      if (url.includes("/wiql")) return { workItems: many };
+      return {};
+    });
     const res = (await tools.get("wit_query")!(
-      { query: "SELECT [System.Id] FROM workitems", top: 50 },
+      { query: "SELECT [System.Id] FROM WorkItems", top: 2 },
       {},
     )) as { content: Array<{ text: string }> };
     expect(res.content).toHaveLength(1);
+    expect(res.content[0]!.text).toContain("Showing 2 of 5");
+  });
+
+  it("wit_query (hierarchical) returns the cleaned relation graph in one block", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/wiql"))
+        return {
+          workItemRelations: [
+            { rel: null, target: { id: 1 } },
+            { rel: "System.LinkTypes.Hierarchy-Forward", source: { id: 1 }, target: { id: 2 } },
+          ],
+        };
+      return {};
+    });
+    const res = (await tools.get("wit_query")!(
+      { query: "SELECT [System.Id] FROM WorkItemLinks" },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content).toHaveLength(1);
+    // Tree queries do not fetch item fields, so no batch call is made.
+    expect(calls.some((c) => c.url.includes("workitemsbatch"))).toBe(false);
+    const parsed = JSON.parse(res.content[0]!.text) as { workItemRelations: unknown[] };
+    expect(parsed.workItemRelations).toHaveLength(2);
   });
 
   it("wit_get truncates a long System.Description and returns compact JSON", async () => {

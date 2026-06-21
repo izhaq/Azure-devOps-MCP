@@ -88,12 +88,18 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     "wit_query",
     {
       description:
-        "Run a WIQL (Work Item Query Language) query and return matching work item references.",
+        "Run a WIQL (Work Item Query Language) query. For flat queries (SELECT … FROM WorkItems), " +
+        "fetches the matched items' fields and returns them as a compact ticket list — same format " +
+        "as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw " +
+        "relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current " +
+        "sprint, state) — it handles identity resolution and iteration without requiring WIQL.",
       inputSchema: {
         query: z
           .string()
           .min(1)
-          .describe("WIQL query text, e.g. SELECT [System.Id] FROM workitems"),
+          .describe(
+            "WIQL query text, e.g. 'SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me'",
+          ),
         project: z
           .string()
           .optional()
@@ -107,23 +113,43 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       // of references and overflow a small model's context. boundLimit applies
       // min(top ?? maxResults, maxResults) so $top is always set.
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.post<{ workItems?: unknown[] }>(
-        "/_apis/wit/wiql",
-        { query },
-        { project, query: { $top: cap } },
-      );
-      const out = asCleanText(result);
-      // When the result fills the cap, more may have matched: tell the model so
-      // it doesn't mistake a capped page for the complete set.
-      if ((result?.workItems?.length ?? 0) >= cap) {
-        out.content.push({
-          type: "text",
-          text:
-            `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be ` +
-            `truncated. Add a tighter WHERE clause or adjust "top" to see more.`,
-        });
+      const result = await client.post<{
+        workItems?: Array<{ id?: number }>;
+        workItemRelations?: unknown[];
+      }>("/_apis/wit/wiql", { query }, { project, query: { $top: cap } });
+
+      // Flat query: a `workItems` array is present → fetch each item's fields
+      // and return them as a compact ticket list, the same shape a weak model
+      // already understands from wit_list_my_work_items. The cap warning is
+      // merged into the list header via meta.total (single content block).
+      if (Array.isArray(result?.workItems)) {
+        const refs = result.workItems.filter(
+          (r): r is { id: number } => typeof r?.id === "number",
+        );
+        const total = refs.length;
+        const ids = refs.slice(0, cap).map((r) => r.id);
+        if (ids.length === 0) return asTicketList([], { total: 0 });
+
+        const items = await client.workItemsBatch<{
+          id?: number;
+          fields?: Record<string, unknown>;
+        }>(ids, LIST_FIELDS);
+        const byId = new Map(items.map((it) => [it.id, it]));
+        const ordered = ids
+          .map((id) => byId.get(id))
+          .filter((it): it is NonNullable<typeof it> => it !== undefined);
+        return asTicketList(ordered, { total });
       }
-      return out;
+
+      // Hierarchical / tree query: return the cleaned relation graph as a single
+      // text block, embedding the cap note in the text (no second content block).
+      const relations = result?.workItemRelations ?? [];
+      const cleaned = cleanAdo(result);
+      const note =
+        relations.length >= cap
+          ? `\n\nNote: results capped at ${cap}. Add a tighter WHERE clause or raise "top".`
+          : "";
+      return textResult(JSON.stringify(cleaned) + note);
     },
   );
 
