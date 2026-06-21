@@ -259,14 +259,27 @@ describe("wit_list_my_work_items", () => {
     expect(res.content[0]!.text).toContain("#1 [Bug] Fix login — Active · Me Myself");
   });
 
-  it("resolves a named assignee then matches with CONTAINS (not @Me)", async () => {
+  it("resolves a named assignee and matches it exactly (not @Me)", async () => {
     const { calls, tools } = routedSetup(defaultRoutes);
     await tools.get("wit_list_my_work_items")!({ assignedTo: "John" }, {});
     const idCall = calls.find((c) => c.url.includes("/_apis/identities"))!;
     expect(idCall.url).toContain("filterValue=John");
     const wiql = wiqlOf(calls);
-    expect(wiql).toContain("[System.AssignedTo] CONTAINS 'Canonical Name'");
+    expect(wiql).toContain("[System.AssignedTo] = 'Canonical Name'");
     expect(wiql).not.toContain("@Me");
+  });
+
+  it("falls back to CONTAINS on the raw name when identity resolution finds nothing", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/_apis/identities")) return { value: [] };
+      if (url.includes("/wiql")) return { workItems: [{ id: 1 }] };
+      if (url.includes("workitemsbatch")) return { value: [{ id: 1, fields: {} }] };
+      return {};
+    });
+    await tools.get("wit_list_my_work_items")!({ assignedTo: "Jane" }, {});
+    const wiql = wiqlOf(calls);
+    expect(wiql).toContain("[System.AssignedTo] CONTAINS 'Jane'");
+    expect(wiql).not.toContain("=");
   });
 
   it("state='all' omits the state filter", async () => {
@@ -286,10 +299,36 @@ describe("wit_list_my_work_items", () => {
     expect(calls.some((c) => c.url.includes("workitemsbatch"))).toBe(false);
   });
 
-  it("caps ids at ADO_AGENT_LIST_CAP via $top", async () => {
-    const { calls, tools } = routedSetup(defaultRoutes);
-    await tools.get("wit_list_my_work_items")!({}, {});
+  it("leaves the WIQL id-query uncapped, caps the batch, and reports true 'N of M'", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: i + 1 }));
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("workitemsbatch"))
+        return { value: many.slice(0, 25).map((r) => ({ id: r.id, fields: {} })) };
+      if (url.includes("/wiql")) return { workItems: many };
+      return {};
+    });
+    const res = (await tools.get("wit_list_my_work_items")!({}, {})) as {
+      content: Array<{ text: string }>;
+    };
+    // The id-query must NOT carry $top — we need the true match count.
     const wiqlCall = calls.find((c) => c.url.includes("/wiql"))!;
-    expect(wiqlCall.url).toContain("%24top=25"); // default agentListCap
+    expect(wiqlCall.url).not.toContain("%24top");
+    // The cap is applied to the batch ids (default agentListCap = 25).
+    const batch = calls.find((c) => c.url.includes("workitemsbatch"))!;
+    expect((batch.body as { ids: number[] }).ids).toHaveLength(25);
+    // The "refine" signal now fires because total (30) > shown (25).
+    expect(res.content[0]!.text).toContain("Showing 25 of 30");
+    expect(res.content[0]!.text).toContain("refine your filter");
+  });
+
+  it("drops WIQL refs that lack a numeric id instead of crashing the batch", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("workitemsbatch")) return { value: [{ id: 7, fields: {} }] };
+      if (url.includes("/wiql")) return { workItems: [{ id: 7 }, { url: "no-id" }, {}] };
+      return {};
+    });
+    await tools.get("wit_list_my_work_items")!({}, {});
+    const batch = calls.find((c) => c.url.includes("workitemsbatch"))!;
+    expect((batch.body as { ids: number[] }).ids).toEqual([7]);
   });
 });

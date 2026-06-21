@@ -9,9 +9,14 @@ export function toRefName(branch: string): string {
 }
 
 /** The MCP tool result shape every formatter returns. */
-type ToolResult = { content: Array<{ type: "text"; text: string }> };
+export type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
-function textResult(text: string): ToolResult {
+/**
+ * Wrap a plain string in the MCP tool result shape. Exported so size-guard
+ * fallbacks in the domain tools build the same shape instead of re-declaring
+ * the literal.
+ */
+export function textResult(text: string): ToolResult {
   return { content: [{ type: "text", text }] };
 }
 
@@ -37,9 +42,10 @@ export function asCompactText(data: unknown): ToolResult {
 }
 
 /**
- * Truncate a string to at most `max` characters, appending a marker that
- * states how many characters were dropped so the model knows the value was
- * cut rather than ended. Non-strings are returned unchanged.
+ * Truncate a string to at most `max` characters of the original value,
+ * followed by a short marker stating how many characters were dropped (so the
+ * model knows the value was cut, not ended). The returned string is therefore
+ * slightly longer than `max` by the marker length. Non-strings pass through.
  */
 export function truncateField<T>(value: T, max: number): T | string {
   if (typeof value !== "string" || value.length <= max) return value;

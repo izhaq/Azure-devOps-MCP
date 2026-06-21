@@ -21642,9 +21642,14 @@ var AzureDevOpsClient = class {
         "/_apis/identities",
         { query: { searchFilter: "General", filterValue: name } }
       );
-      const first = result?.value?.[0];
-      if (!first) return void 0;
-      const display = first["providerDisplayName"] ?? first["displayName"];
+      const candidates = result?.value ?? [];
+      if (candidates.length === 0) return void 0;
+      const displayOf = (c) => c["providerDisplayName"] ?? c["displayName"];
+      const needle = name.trim().toLowerCase();
+      const exact = candidates.find(
+        (c) => [displayOf(c), c["displayName"], c["mailAddress"], c["mail"], c["uniqueName"]].some((v) => typeof v === "string" && v.toLowerCase() === needle)
+      );
+      const display = displayOf(exact ?? candidates[0]);
       return display && display.length > 0 ? display : void 0;
     } catch {
       return void 0;
@@ -31433,8 +31438,7 @@ var LIST_FIELDS = [
   "System.WorkItemType"
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
-var MAX_INLINE_ITEM_BYTES = 5e4;
-var MAX_LIST_BYTES = 5e4;
+var MAX_INLINE_RESULT_BYTES = 5e4;
 function formatWorkItemDetail(item) {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
@@ -31445,17 +31449,12 @@ function formatWorkItemDetail(item) {
     }
     shaped = { ...item, fields };
   }
-  const text = JSON.stringify(shaped);
-  if (text.length > MAX_INLINE_ITEM_BYTES) {
+  const bytes = Buffer.byteLength(JSON.stringify(shaped), "utf8");
+  if (bytes > MAX_INLINE_RESULT_BYTES) {
     const id = item?.id;
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Work item ${id ?? "?"} is too large to return inline (${text.length} bytes). Re-fetch only the fields you need via wit_get's "fields" argument, e.g. ["System.Title","System.State","System.AssignedTo"].`
-        }
-      ]
-    };
+    return textResult(
+      `Work item ${id ?? "?"} is too large to return inline (${bytes} bytes). Re-fetch only the fields you need via wit_get's "fields" argument, e.g. ["System.Title","System.State","System.AssignedTo"].`
+    );
   }
   return asCompactText(shaped);
 }
@@ -31509,7 +31508,7 @@ function configureWorkItemsTools(server, deps) {
       let assignedToOpt;
       if (!useMine && assignedTo) {
         const canonical = await client.resolveIdentity(assignedTo);
-        assignedToOpt = { value: canonical ?? assignedTo, match: "contains" };
+        assignedToOpt = canonical ? { value: canonical, match: "equals" } : { value: assignedTo, match: "contains" };
       }
       let states;
       let allStates = false;
@@ -31529,25 +31528,24 @@ function configureWorkItemsTools(server, deps) {
       const result = await client.post(
         "/_apis/wit/wiql",
         { query: wiql },
-        { project, query: { $top: cap } }
+        { project }
       );
-      const refs = result?.workItems ?? [];
+      const refs = (result?.workItems ?? []).filter(
+        (r) => typeof r.id === "number"
+      );
+      const total = refs.length;
       const ids = refs.slice(0, cap).map((r) => r.id);
       if (ids.length === 0) return asTicketList([], { total: 0 });
       const items = await client.workItemsBatch(
         ids,
         LIST_FIELDS
       );
-      const listed = asTicketList(items, { total: refs.length });
-      if ((listed.content[0]?.text.length ?? 0) > MAX_LIST_BYTES) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Result set is too large to return inline (${items.length} items). Narrow your filter (state, assignedTo, titleContains) or lower "top".`
-            }
-          ]
-        };
+      const listed = asTicketList(items, { total });
+      const listText = listed.content[0]?.text ?? "";
+      if (Buffer.byteLength(listText, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        return textResult(
+          `Result set is too large to return inline (${items.length} items). Narrow your filter (state, assignedTo, titleContains) or lower "top".`
+        );
       }
       return listed;
     }

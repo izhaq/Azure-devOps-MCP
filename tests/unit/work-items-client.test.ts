@@ -80,4 +80,17 @@ describe("AzureDevOpsClient.resolveIdentity", () => {
     const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
     expect(await client.resolveIdentity("john")).toBeUndefined();
   });
+
+  it("prefers a candidate that exactly matches the input over the first result", async () => {
+    const { impl } = recording(() =>
+      json({
+        value: [
+          { providerDisplayName: "Daniela Cohen" },
+          { providerDisplayName: "Dan Levi", displayName: "Dan Levi" },
+        ],
+      }),
+    );
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    expect(await client.resolveIdentity("dan levi")).toBe("Dan Levi");
+  });
 });

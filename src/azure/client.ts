@@ -189,9 +189,20 @@ export class AzureDevOpsClient {
         "/_apis/identities",
         { query: { searchFilter: "General", filterValue: name } },
       );
-      const first = result?.value?.[0];
-      if (!first) return undefined;
-      const display = (first["providerDisplayName"] ?? first["displayName"]) as string | undefined;
+      const candidates = result?.value ?? [];
+      if (candidates.length === 0) return undefined;
+      const displayOf = (c: Record<string, unknown>): string | undefined =>
+        (c["providerDisplayName"] ?? c["displayName"]) as string | undefined;
+      // A "General" search is fuzzy and can return several identities. Prefer
+      // one that case-insensitively matches the input on a stable field, so an
+      // ambiguous name doesn't silently resolve to an arbitrary person; fall
+      // back to the first result only when nothing matches exactly.
+      const needle = name.trim().toLowerCase();
+      const exact = candidates.find((c) =>
+        [displayOf(c), c["displayName"], c["mailAddress"], c["mail"], c["uniqueName"]]
+          .some((v) => typeof v === "string" && v.toLowerCase() === needle),
+      );
+      const display = displayOf(exact ?? candidates[0]!);
       return display && display.length > 0 ? display : undefined;
     } catch {
       return undefined;
