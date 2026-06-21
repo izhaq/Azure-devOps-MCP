@@ -13,6 +13,7 @@ const LIST_FIELDS = [
   "System.State",
   "System.AssignedTo",
   "System.WorkItemType",
+  "System.CreatedBy",
 ];
 
 /** Truncate `System.Description` (raw HTML) in the detail path; see Defect 1. */
@@ -26,20 +27,38 @@ const MAX_DESCRIPTION_CHARS = 2000;
  */
 const MAX_INLINE_RESULT_BYTES = 50_000;
 
+/** Top-level work item fields that are pure ADO internals — never useful to the model. */
+const STRIP_WIT_TOP_LEVEL = new Set(["rev", "commentVersionRef"]);
+
 /**
- * Format a single work item for the detail path: truncate the raw HTML
- * description, then apply cleanAdo (strips _links everywhere, flattens identity
- * objects to display names). If still oversized, return an actionable message.
+ * Format a single work item for the detail path:
+ * - Strip top-level noise fields (rev, commentVersionRef).
+ * - Truncate ALL HTML-containing fields in `fields` (not just System.Description —
+ *   ReproSteps, SystemInfo, History, etc. are equally verbose raw HTML).
+ * - Apply cleanAdo (strips _links, flattens identities).
+ * - Size-guard at 50 KB; return an actionable message if exceeded.
  */
 function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
   let shaped: unknown = item;
   if (item && typeof item === "object" && "fields" in item) {
     const raw = item as Record<string, unknown>;
-    const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
-    if (typeof fields["System.Description"] === "string") {
-      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+
+    // Strip top-level noise, keep everything else
+    const top: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!STRIP_WIT_TOP_LEVEL.has(k)) top[k] = v;
     }
-    shaped = { ...raw, fields };
+
+    // Truncate every field whose value looks like HTML (contains an opening tag).
+    // This catches System.Description, ReproSteps, SystemInfo, History, etc.
+    const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
+    for (const [key, val] of Object.entries(fields)) {
+      if (typeof val === "string" && val.includes("<") && val.length > MAX_DESCRIPTION_CHARS) {
+        fields[key] = truncateField(val, MAX_DESCRIPTION_CHARS);
+      }
+    }
+
+    shaped = { ...top, fields };
   }
   const cleaned = cleanAdo(shaped);
   const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
@@ -88,12 +107,18 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     "wit_query",
     {
       description:
-        "Run a WIQL (Work Item Query Language) query and return matching work item references.",
+        "Run a WIQL (Work Item Query Language) query. For flat queries (SELECT … FROM WorkItems), " +
+        "fetches the matched items' fields and returns them as a compact ticket list — same format " +
+        "as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw " +
+        "relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current " +
+        "sprint, state) — it handles identity resolution and iteration without requiring WIQL.",
       inputSchema: {
         query: z
           .string()
           .min(1)
-          .describe("WIQL query text, e.g. SELECT [System.Id] FROM workitems"),
+          .describe(
+            "WIQL query text, e.g. 'SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me'",
+          ),
         project: z
           .string()
           .optional()
@@ -107,23 +132,43 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       // of references and overflow a small model's context. boundLimit applies
       // min(top ?? maxResults, maxResults) so $top is always set.
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.post<{ workItems?: unknown[] }>(
-        "/_apis/wit/wiql",
-        { query },
-        { project, query: { $top: cap } },
-      );
-      const out = asCleanText(result);
-      // When the result fills the cap, more may have matched: tell the model so
-      // it doesn't mistake a capped page for the complete set.
-      if ((result?.workItems?.length ?? 0) >= cap) {
-        out.content.push({
-          type: "text",
-          text:
-            `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be ` +
-            `truncated. Add a tighter WHERE clause or adjust "top" to see more.`,
-        });
+      const result = await client.post<{
+        workItems?: Array<{ id?: number }>;
+        workItemRelations?: unknown[];
+      }>("/_apis/wit/wiql", { query }, { project, query: { $top: cap } });
+
+      // Flat query: a `workItems` array is present → fetch each item's fields
+      // and return them as a compact ticket list, the same shape a weak model
+      // already understands from wit_list_my_work_items. The cap warning is
+      // merged into the list header via meta.total (single content block).
+      if (Array.isArray(result?.workItems)) {
+        const refs = result.workItems.filter(
+          (r): r is { id: number } => typeof r?.id === "number",
+        );
+        const total = refs.length;
+        const ids = refs.slice(0, cap).map((r) => r.id);
+        if (ids.length === 0) return asTicketList([], { total: 0 });
+
+        const items = await client.workItemsBatch<{
+          id?: number;
+          fields?: Record<string, unknown>;
+        }>(ids, LIST_FIELDS);
+        const byId = new Map(items.map((it) => [it.id, it]));
+        const ordered = ids
+          .map((id) => byId.get(id))
+          .filter((it): it is NonNullable<typeof it> => it !== undefined);
+        return asTicketList(ordered, { total });
       }
-      return out;
+
+      // Hierarchical / tree query: return the cleaned relation graph as a single
+      // text block, embedding the cap note in the text (no second content block).
+      const relations = result?.workItemRelations ?? [];
+      const cleaned = cleanAdo(result);
+      const note =
+        relations.length >= cap
+          ? `\n\nNote: results capped at ${cap}. Add a tighter WHERE clause or raise "top".`
+          : "";
+      return textResult(JSON.stringify(cleaned) + note);
     },
   );
 
@@ -306,7 +351,14 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         fields: z
           .record(z.string(), z.unknown())
           .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
-          .describe('Field map keyed by reference name, e.g. {"System.Title": "..."}'),
+          .describe(
+            "Field map keyed by ADO field reference names. Common fields: " +
+              '"System.Title" (required), "System.Description", "System.AssignedTo" (display name), ' +
+              '"System.AreaPath", "System.IterationPath", "System.Tags", ' +
+              '"Microsoft.VSTS.Common.Priority" (1-4), "Microsoft.VSTS.Common.Severity", ' +
+              '"Microsoft.VSTS.TCM.ReproSteps" (for Bugs), "System.State". ' +
+              'Example: {"System.Title": "Fix login bug", "System.AssignedTo": "Alice Smith"}',
+          ),
       },
     },
     async ({ project, type, fields }, extra) => {
@@ -330,7 +382,14 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         fields: z
           .record(z.string(), z.unknown())
           .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
-          .describe('Field map keyed by reference name, e.g. {"System.State": "Active"}'),
+          .describe(
+            "Field map keyed by ADO field reference names. Common fields: " +
+              '"System.State" (e.g. "Active", "Resolved", "Closed"), "System.AssignedTo" (display name), ' +
+              '"System.Title", "System.Description", "System.Tags", "System.AreaPath", ' +
+              '"System.IterationPath", "Microsoft.VSTS.Common.Priority" (1-4), ' +
+              '"Microsoft.VSTS.Common.ResolvedReason", "System.Reason". ' +
+              'Example: {"System.State": "Active", "System.AssignedTo": "Bob Jones"}',
+          ),
       },
     },
     async ({ id, fields }, extra) => {

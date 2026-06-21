@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asCleanText, toRefName } from "./_shared.js";
+import { asPRList, asCleanText, cleanAdo, textResult, toRefName, truncateField } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -46,6 +46,14 @@ const MAX_INLINE_FILE_BYTES = 1_000_000;
 /** Pull request states accepted by list/update (ADO `GitPullRequestStatus`). */
 const PR_STATUS = ["active", "abandoned", "completed", "all"] as const;
 
+/**
+ * Inline payload budget for PR read paths (threads, get). If a cleaned payload
+ * exceeds this, return a short summary instead of overflowing a small model's
+ * context. Measured in UTF-8 bytes; mirrors the 50 000-byte size-guard
+ * convention in `work-items.ts` / `wiki.ts`.
+ */
+const MAX_INLINE_RESULT_BYTES = 50_000;
+
 export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "repo_list",
@@ -69,8 +77,20 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
       // best-effort. Bound the RESULT by the same min(top ?? maxResults,
       // maxResults) cap getAll applies, so list tools stay consistent.
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get<{ value?: unknown[] }>("/_apis/git/repositories", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
+        "/_apis/git/repositories",
+        { project },
+      );
+      // Slim to the fields a model needs to identify repos and chain into other
+      // tools (pr_list, repo_list_branches, etc.). Full objects contain dozens
+      // of fields (capabilities, project nesting, sizes) that waste tokens.
+      const slim = (result.value ?? []).slice(0, cap).map((r) => ({
+        id: r["id"],
+        name: r["name"],
+        defaultBranch: r["defaultBranch"],
+        remoteUrl: r["remoteUrl"],
+      }));
+      return asCleanText(slim);
     },
   );
 
@@ -92,12 +112,24 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
     },
     async ({ repositoryId, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const refs = await client.getAll(
+      const refs = await client.getAll<Record<string, unknown>>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/refs`,
         { project, query: { filter: "heads/" } },
         top,
       );
-      return asCleanText(refs);
+      // ADO returns names like "refs/heads/main"; strip the prefix so a weak
+      // model sees the plain branch name it expects ("main").
+      const withShortName = refs.map((ref) => {
+        if (ref && typeof ref === "object" && typeof ref.name === "string") {
+          const name = ref.name;
+          return {
+            ...ref,
+            name: name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name,
+          };
+        }
+        return ref;
+      });
+      return asCleanText(withShortName);
     },
   );
 
@@ -180,7 +212,17 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
           },
         },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const allItems = result.value ?? [];
+      const sliced = allItems.slice(0, cap);
+      // When a recursive listing is sliced, tell the model it's partial so it
+      // doesn't treat a capped page as the whole tree.
+      if (allItems.length > cap) {
+        return textResult(
+          JSON.stringify(cleanAdo(sliced)) +
+            `\n\n[Truncated: showing ${cap} of ${allItems.length} items. Use scopePath to narrow the listing.]`,
+        );
+      }
+      return asCleanText(sliced);
     },
   );
 
@@ -236,13 +278,21 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         repositoryId: z.string().min(1).describe("Repository id or name"),
         commitId: z.string().min(1).describe("Commit SHA"),
         project: z.string().min(1).optional().describe("Project name or ID"),
+        includeChanges: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include the list of changed files in the response (adds a 'changes' array to the commit)",
+          ),
       },
     },
-    async ({ repositoryId, commitId, project }, extra) => {
+    async ({ repositoryId, commitId, project, includeChanges }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const query: Record<string, QueryValue> = {};
+      if (includeChanges) query["changeCount"] = 100;
       const commit = await client.get(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
-        { project },
+        { project, query },
       );
       return asCleanText(commit);
     },
@@ -298,7 +348,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -314,11 +364,38 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     },
     async ({ repositoryId, pullRequestId, project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const pr = await client.get(
+      const pr = await client.get<Record<string, unknown>>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project },
       );
-      return asCleanText(pr);
+      // Truncate a long description to keep the payload manageable for small
+      // models, mirroring wit_get's handling of System.Description.
+      if (pr && typeof pr === "object" && typeof pr["description"] === "string") {
+        pr["description"] = truncateField(pr["description"] as string, 2000);
+      }
+      const cleaned = cleanAdo(pr);
+      const payload = JSON.stringify(cleaned);
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        // Still too large (e.g. hundreds of reviewers): return key fields only.
+        const safe: Record<string, unknown> = {};
+        for (const key of [
+          "pullRequestId",
+          "title",
+          "status",
+          "createdBy",
+          "creationDate",
+          "sourceRefName",
+          "targetRefName",
+          "mergeStatus",
+          "isDraft",
+          "reviewers",
+        ]) {
+          if (pr && key in pr) safe[key] = cleanAdo(pr[key]);
+        }
+        safe["__truncated"] = true;
+        return textResult(JSON.stringify(safe));
+      }
+      return textResult(payload);
     },
   );
 
@@ -338,11 +415,50 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
       // one response. Bound the RESULT to maxResults for consistency with the
       // other list tools so a noisy PR can't blow up the payload.
       const cap = boundLimit(undefined, deps.config.maxResults);
-      const result = await client.get<{ value?: unknown[] }>(
+      const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+
+      // Strip per-thread noise that is never useful to the model: file-position
+      // context, nested iteration refs, the always-false isDeleted flag, the
+      // properties bag, and per-comment usersLiked lists.
+      const STRIP_THREAD_KEYS = new Set([
+        "threadContext",
+        "pullRequestThreadContext",
+        "isDeleted",
+        "properties",
+      ]);
+      const STRIP_COMMENT_KEYS = new Set(["usersLiked"]);
+
+      const threads = (result.value ?? []).slice(0, cap).map((thread) => {
+        const cleaned: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(thread)) {
+          if (STRIP_THREAD_KEYS.has(k)) continue;
+          if (k === "comments" && Array.isArray(v)) {
+            cleaned[k] = v.map((c: Record<string, unknown>) => {
+              const cc: Record<string, unknown> = {};
+              for (const [ck, cv] of Object.entries(c)) {
+                if (STRIP_COMMENT_KEYS.has(ck)) continue;
+                cc[ck] = cv;
+              }
+              return cc;
+            });
+          } else {
+            cleaned[k] = v;
+          }
+        }
+        return cleaned;
+      });
+
+      const payload = JSON.stringify(cleanAdo(threads));
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        return textResult(
+          `PR #${pullRequestId} has ${threads.length} threads but the payload is too large to ` +
+            `return inline. The PR may have many long comments. Try fetching the PR summary via pr_get.`,
+        );
+      }
+      return textResult(payload);
     },
   );
 
@@ -357,18 +473,47 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         title: z.string().min(1).describe("Pull request title"),
         description: z.string().optional().describe("Pull request description"),
         project: z.string().min(1).optional().describe("Project name or ID"),
+        reviewers: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Display names of reviewers to add (e.g. ['Alice Smith', 'Bob Jones']). " +
+              "Names are resolved to identity GUIDs automatically; unresolved names are skipped.",
+          ),
       },
     },
-    async ({ repositoryId, sourceBranch, targetBranch, title, description, project }, extra) => {
+    async ({ repositoryId, sourceBranch, targetBranch, title, description, project, reviewers }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+
+      // Resolve reviewer display names to identity ids (best-effort: an
+      // unresolved name is skipped rather than failing the whole create).
+      const resolvedReviewers: Array<{ id: string }> = [];
+      if (reviewers && reviewers.length > 0) {
+        for (const name of reviewers) {
+          try {
+            const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
+              "/_apis/identities",
+              { query: { searchFilter: "General", filterValue: name } },
+            );
+            const id = result?.value?.[0]?.["id"] as string | undefined;
+            if (id) resolvedReviewers.push({ id });
+          } catch {
+            // Non-fatal — skip this reviewer.
+          }
+        }
+      }
+
+      const body: Record<string, unknown> = {
+        sourceRefName: toRefName(sourceBranch),
+        targetRefName: toRefName(targetBranch),
+        title,
+        description,
+      };
+      if (resolvedReviewers.length > 0) body["reviewers"] = resolvedReviewers;
+
       const pr = await client.post(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
-        {
-          sourceRefName: toRefName(sourceBranch),
-          targetRefName: toRefName(targetBranch),
-          title,
-          description,
-        },
+        body,
         { project },
       );
       return asCleanText(pr);
@@ -417,21 +562,35 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
           .min(1)
           .optional()
           .describe(
-            "Current source branch tip commit id (NOT a merge commit); required by the server to complete a PR",
+            "Current source branch tip commit id; if omitted when completing, it is auto-fetched " +
+              "from the PR — you usually don't need to supply this.",
           ),
         project: z.string().min(1).optional().describe("Project name or ID"),
       },
     },
     async ({ repositoryId, pullRequestId, status, lastMergeSourceCommitId, project }, extra) => {
-      if (status === "completed" && !lastMergeSourceCommitId) {
-        throw new Error(
-          "Completing a pull request requires 'lastMergeSourceCommitId' (the current source branch tip commit id).",
-        );
-      }
       const client = deps.clientFor(patFromExtra(extra));
+
+      // Completing a PR requires the source branch tip commit id, which a weak
+      // model never knows. Auto-fetch it from the PR instead of erroring out.
+      let commitId = lastMergeSourceCommitId;
+      if (status === "completed" && !commitId) {
+        const pr = await client.get<{ lastMergeSourceCommit?: { commitId?: string } }>(
+          `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
+          { project },
+        );
+        commitId = pr?.lastMergeSourceCommit?.commitId;
+        if (!commitId) {
+          throw new Error(
+            `Could not auto-fetch lastMergeSourceCommitId for PR ${pullRequestId}. ` +
+              `The PR may not have a source commit yet (e.g. no commits pushed).`,
+          );
+        }
+      }
+
       const body: Record<string, unknown> = { status };
-      if (lastMergeSourceCommitId) {
-        body["lastMergeSourceCommit"] = { commitId: lastMergeSourceCommitId };
+      if (commitId) {
+        body["lastMergeSourceCommit"] = { commitId };
       }
       const pr = await client.patch(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
@@ -439,6 +598,63 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         { project },
       );
       return asCleanText(pr);
+    },
+  );
+
+  server.registerTool(
+    "pr_list_mine",
+    {
+      description:
+        "List YOUR open pull requests across all repositories in a project (or the whole collection). " +
+        "Use this to answer 'what PRs do I have open?' without needing to know the repository. " +
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given. " +
+        "Falls back to listing all active PRs (not filtered by creator) if your identity cannot be resolved.",
+      inputSchema: {
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given; omit for collection-wide"),
+        status: z
+          .enum(PR_STATUS)
+          .optional()
+          .describe("Filter by PR status: active (default), abandoned, completed, or all"),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .max(deps.config.maxResults)
+          .optional()
+          .describe("Maximum number of pull requests"),
+      },
+    },
+    async ({ project, status, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const cap = boundLimit(top, deps.config.maxResults);
+
+      // Resolve the current user's identity id to filter by creator. The
+      // profile endpoint may not exist on every on-prem build, so this is
+      // best-effort: on failure we fall through and list all matching PRs.
+      let creatorId: string | undefined;
+      try {
+        const profile = await client.get<{ id?: string }>("/_apis/profile/profiles/me", {});
+        creatorId = profile?.id;
+      } catch {
+        // best-effort — no creator filter
+      }
+
+      const query: Record<string, QueryValue> = {
+        "searchCriteria.status": status ?? "active",
+        $top: cap,
+      };
+      if (creatorId) query["searchCriteria.creatorId"] = creatorId;
+
+      const result = await client.get<{ value?: unknown[] }>("/_apis/git/pullrequests", {
+        project: effectiveProject,
+        query,
+      });
+      return asPRList((result.value ?? []).slice(0, cap));
     },
   );
 }

@@ -26,8 +26,17 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
     },
     async ({ top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const projects = await client.getAll("/_apis/projects", {}, top);
-      return asCleanText(projects);
+      const projects = await client.getAll<Record<string, unknown>>("/_apis/projects", {}, top);
+      // Keep only the fields a model needs to identify a project; ADO returns
+      // many extras (capabilities, defaultTeam, visibility, lastUpdateTime…)
+      // that are pure token cost here.
+      const slim = projects.map((p) => ({
+        id: p["id"],
+        name: p["name"],
+        description: p["description"],
+        state: p["state"],
+      }));
+      return asCleanText(slim);
     },
   );
 

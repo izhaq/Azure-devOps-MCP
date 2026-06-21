@@ -51,6 +51,12 @@ export function cleanAdo(value: unknown): unknown {
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
     if (key === "url" && typeof val === "string") continue;
+    // Strip the `refs/heads/` prefix from Git ref name fields so a model sees
+    // "main" rather than "refs/heads/main" in PR source/target branch fields.
+    if (key.endsWith("RefName") && typeof val === "string" && val.startsWith("refs/heads/")) {
+      result[key] = val.slice("refs/heads/".length);
+      continue;
+    }
     result[key] = cleanAdo(val);
   }
   return result;
@@ -125,10 +131,41 @@ function identityName(value: unknown): string {
 }
 
 /**
+ * Render a PR list as one compact line per PR. Applies cleanAdo internally so
+ * identity objects are flattened and ref prefixes are already stripped. Use
+ * this on pr_list / pr_list_mine instead of dumping full PR objects.
+ *
+ * Format: `#42 "Title" — active · feature/x → main · Alice (3 reviewers)`
+ */
+export function asPRList(prs: unknown[], meta?: { total?: number }): ToolResult {
+  const shown = prs.length;
+  const total = meta?.total ?? shown;
+  const header =
+    total > shown
+      ? `Showing ${shown} of ${total} pull requests — raise "top" to see more.`
+      : `${shown} pull request${shown === 1 ? "" : "s"}.`;
+  const lines = (prs as Array<Record<string, unknown>>).map((raw) => {
+    const pr = cleanAdo(raw) as Record<string, unknown>;
+    const id = pr["pullRequestId"] ?? "?";
+    const title = (pr["title"] as string) ?? "(no title)";
+    const status = pr["isDraft"] === true ? "draft" : ((pr["status"] as string) ?? "?");
+    const source = (pr["sourceRefName"] as string) ?? "?";
+    const target = (pr["targetRefName"] as string) ?? "?";
+    const author = typeof pr["createdBy"] === "string" ? pr["createdBy"] : identityName(pr["createdBy"]);
+    const reviewers = pr["reviewers"] as unknown[] | undefined;
+    const rCount = reviewers?.length ?? 0;
+    const rSuffix = rCount > 0 ? ` · ${rCount} reviewer${rCount === 1 ? "" : "s"}` : "";
+    return `#${id} "${title}" — ${status} · ${source} → ${target} · ${author}${rSuffix}`;
+  });
+  return textResult([header, ...lines].join("\n"));
+}
+
+/**
  * Render a projected work-item list as one compact line per ticket plus a
- * leading "showing N of M" line. This is the token-shaped replacement for
- * dumping full JSON objects: a small model gets exactly id, type, title,
- * state, and assignee — enough to pick the next action — and nothing else.
+ * leading "showing N of M" line. Each line includes id, type, title, state,
+ * assignee, and creator (when different from the assignee) — enough for a
+ * small model to answer follow-up questions like "who assigned them?" without
+ * making additional tool calls.
  *
  * `meta.total` is the pre-cap match count (from the WIQL result) so the line
  * can tell the model when results were capped and to refine or paginate.
@@ -147,7 +184,11 @@ export function asTicketList(items: ProjectedWorkItem[], meta?: { total?: number
     const title = (f["System.Title"] as string) ?? "(no title)";
     const state = (f["System.State"] as string) ?? "?";
     const assignee = identityName(f["System.AssignedTo"]);
-    return `#${id} [${type}] ${title} — ${state} · ${assignee}`;
+    const creator = identityName(f["System.CreatedBy"]);
+    // Include creator only when it differs from the assignee — avoids redundant
+    // noise on self-created tickets while answering "by whom?" for the rest.
+    const creatorSuffix = creator !== assignee && creator !== "Unassigned" ? ` · created by ${creator}` : "";
+    return `#${id} [${type}] ${title} — ${state} · ${assignee}${creatorSuffix}`;
   });
   return textResult([header, ...lines].join("\n"));
 }

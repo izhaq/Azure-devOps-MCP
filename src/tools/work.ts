@@ -29,9 +29,10 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     "work_get_current_sprint",
     {
       description:
-        "Get the current sprint (iteration) for a project. Returns the sprint name and dates. " +
-        "Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. " +
-        "Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+        "Get the name and dates of the CURRENT (active) sprint for a project. Returns a single line. " +
+        "Use this to answer 'what sprint are we in?' or 'what is the current sprint?'. " +
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given. " +
+        "To see ALL sprints (past and future), use work_list_iterations instead.",
       inputSchema: {
         project: z.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
@@ -66,7 +67,11 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "work_list_iterations",
     {
-      description: "List a team's iterations (sprints), optionally only the current one.",
+      description:
+        "List a team's iterations (sprints). By default lists ALL iterations (past and future). " +
+        "Pass timeframe='current' to return only the active sprint (same as work_get_current_sprint " +
+        "but returns the raw object). To just know the current sprint name and dates, prefer " +
+        "work_get_current_sprint — it returns a single clean line.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
@@ -131,15 +136,45 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       description: "Get a team's capacity (per-member capacity and days off) for an iteration.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
-        iterationId: z.string().uuid().describe("Iteration id (GUID)"),
+        iterationId: z
+          .string()
+          .min(1)
+          .describe(
+            "Iteration GUID or iteration name (e.g. 'Sprint 48'); a name is resolved to its " +
+              "GUID automatically via the team's iteration list.",
+          ),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
       },
     },
     async ({ project, iterationId, team }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+
+      // A weak model almost never knows the iteration GUID; it knows the sprint
+      // name. Resolve a name to its GUID by listing the team's iterations and
+      // matching case-insensitively. GUID input passes straight through.
+      const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedId = iterationId;
+      if (!GUID_RE.test(iterationId)) {
+        const iters = await client.get<{ value?: Array<{ id?: string; name?: string }> }>(
+          workPath(team, "teamsettings/iterations"),
+          { project: effectiveProject },
+        );
+        const match = (iters.value ?? []).find(
+          (it) => it.name?.toLowerCase() === iterationId.toLowerCase(),
+        );
+        if (!match?.id) {
+          throw new Error(
+            `No iteration named '${iterationId}' found in project '${effectiveProject ?? "(unknown)"}'. ` +
+              `Use work_list_iterations to see available iterations and their ids.`,
+          );
+        }
+        resolvedId = match.id;
+      }
+
       const capacity = await client.get(
-        workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
-        { project },
+        workPath(team, `teamsettings/iterations/${encodeURIComponent(resolvedId)}/capacities`),
+        { project: effectiveProject },
       );
       return asCleanText(capacity);
     },

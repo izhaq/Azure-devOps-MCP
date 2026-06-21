@@ -21519,6 +21519,38 @@ var AdoApiError = class extends Error {
     this.details = details;
   }
 };
+var ADO_ERROR_HINTS = [
+  [
+    /TF401495/,
+    "The iteration path does not exist in this project. Use work_list_iterations to find valid iteration paths."
+  ],
+  [
+    /TF400499/,
+    "The team or project was not found. Check the project name and team name with core_list_projects and core_list_teams."
+  ],
+  [
+    /TF200016/,
+    "The work item type does not exist in this project. Use wit_list_types to see available types."
+  ],
+  [
+    /VS402335|TF401349/,
+    "Access denied. Your PAT may lack the required scope, or you do not have permission for this operation."
+  ],
+  [/TF401232/, "The repository was not found. Use repo_list to see available repositories."],
+  [/TF401019/, "The branch was not found. Use repo_list_branches to see available branches."],
+  [
+    /TF400898/,
+    "Completing this pull request failed because of a policy violation (e.g. required reviewers, linked work items)."
+  ],
+  [
+    /TF401003|TF401004/,
+    "Authentication failed. Check that your PAT is valid and has not expired."
+  ],
+  [
+    /TF26027/,
+    "The field reference name is not valid for this work item type. Use wit_list_types or see the ADO field reference name list."
+  ]
+];
 function adoErrorFromResponse(status, bodyText) {
   let message = bodyText?.trim() || `HTTP ${status}`;
   let details = bodyText;
@@ -21529,6 +21561,12 @@ function adoErrorFromResponse(status, bodyText) {
     }
     details = parsed;
   } catch {
+  }
+  for (const [pattern, hint] of ADO_ERROR_HINTS) {
+    if (pattern.test(message)) {
+      message = `${message} \u2014 Hint: ${hint}`;
+      break;
+    }
   }
   return new AdoApiError(status, `Azure DevOps API error ${status}: ${message}`, details);
 }
@@ -31347,6 +31385,10 @@ function cleanAdo(value) {
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
     if (key === "url" && typeof val === "string") continue;
+    if (key.endsWith("RefName") && typeof val === "string" && val.startsWith("refs/heads/")) {
+      result[key] = val.slice("refs/heads/".length);
+      continue;
+    }
     result[key] = cleanAdo(val);
   }
   return result;
@@ -31371,6 +31413,25 @@ function identityName(value) {
   }
   return String(value);
 }
+function asPRList(prs, meta3) {
+  const shown = prs.length;
+  const total = meta3?.total ?? shown;
+  const header = total > shown ? `Showing ${shown} of ${total} pull requests \u2014 raise "top" to see more.` : `${shown} pull request${shown === 1 ? "" : "s"}.`;
+  const lines = prs.map((raw) => {
+    const pr = cleanAdo(raw);
+    const id = pr["pullRequestId"] ?? "?";
+    const title = pr["title"] ?? "(no title)";
+    const status = pr["isDraft"] === true ? "draft" : pr["status"] ?? "?";
+    const source = pr["sourceRefName"] ?? "?";
+    const target = pr["targetRefName"] ?? "?";
+    const author = typeof pr["createdBy"] === "string" ? pr["createdBy"] : identityName(pr["createdBy"]);
+    const reviewers = pr["reviewers"];
+    const rCount = reviewers?.length ?? 0;
+    const rSuffix = rCount > 0 ? ` \xB7 ${rCount} reviewer${rCount === 1 ? "" : "s"}` : "";
+    return `#${id} "${title}" \u2014 ${status} \xB7 ${source} \u2192 ${target} \xB7 ${author}${rSuffix}`;
+  });
+  return textResult([header, ...lines].join("\n"));
+}
 function asTicketList(items, meta3) {
   const shown = items.length;
   const total = meta3?.total ?? shown;
@@ -31382,7 +31443,9 @@ function asTicketList(items, meta3) {
     const title = f["System.Title"] ?? "(no title)";
     const state = f["System.State"] ?? "?";
     const assignee = identityName(f["System.AssignedTo"]);
-    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}`;
+    const creator = identityName(f["System.CreatedBy"]);
+    const creatorSuffix = creator !== assignee && creator !== "Unassigned" ? ` \xB7 created by ${creator}` : "";
+    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}${creatorSuffix}`;
   });
   return textResult([header, ...lines].join("\n"));
 }
@@ -31400,7 +31463,13 @@ function configureCoreTools(server, deps) {
     async ({ top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const projects = await client.getAll("/_apis/projects", {}, top);
-      return asCleanText(projects);
+      const slim = projects.map((p) => ({
+        id: p["id"],
+        name: p["name"],
+        description: p["description"],
+        state: p["state"]
+      }));
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31465,19 +31534,27 @@ var LIST_FIELDS = [
   "System.Title",
   "System.State",
   "System.AssignedTo",
-  "System.WorkItemType"
+  "System.WorkItemType",
+  "System.CreatedBy"
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
 var MAX_INLINE_RESULT_BYTES = 5e4;
+var STRIP_WIT_TOP_LEVEL = /* @__PURE__ */ new Set(["rev", "commentVersionRef"]);
 function formatWorkItemDetail(item) {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
     const raw = item;
-    const fields = { ...raw.fields };
-    if (typeof fields["System.Description"] === "string") {
-      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+    const top = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!STRIP_WIT_TOP_LEVEL.has(k)) top[k] = v;
     }
-    shaped = { ...raw, fields };
+    const fields = { ...raw.fields };
+    for (const [key, val] of Object.entries(fields)) {
+      if (typeof val === "string" && val.includes("<") && val.length > MAX_DESCRIPTION_CHARS) {
+        fields[key] = truncateField(val, MAX_DESCRIPTION_CHARS);
+      }
+    }
+    shaped = { ...top, fields };
   }
   const cleaned = cleanAdo(shaped);
   const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
@@ -31501,9 +31578,11 @@ function configureWorkItemsTools(server, deps) {
   server.registerTool(
     "wit_query",
     {
-      description: "Run a WIQL (Work Item Query Language) query and return matching work item references.",
+      description: "Run a WIQL (Work Item Query Language) query. For flat queries (SELECT \u2026 FROM WorkItems), fetches the matched items' fields and returns them as a compact ticket list \u2014 same format as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current sprint, state) \u2014 it handles identity resolution and iteration without requiring WIQL.",
       inputSchema: {
-        query: external_exports.string().min(1).describe("WIQL query text, e.g. SELECT [System.Id] FROM workitems"),
+        query: external_exports.string().min(1).describe(
+          "WIQL query text, e.g. 'SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me'"
+        ),
         project: external_exports.string().optional().describe("Project name or ID to scope the query; omit for collection scope"),
         top: external_exports.number().int().positive().optional().describe("Maximum number of results")
       }
@@ -31511,19 +31590,25 @@ function configureWorkItemsTools(server, deps) {
     async ({ query, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.post(
-        "/_apis/wit/wiql",
-        { query },
-        { project, query: { $top: cap } }
-      );
-      const out = asCleanText(result);
-      if ((result?.workItems?.length ?? 0) >= cap) {
-        out.content.push({
-          type: "text",
-          text: `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be truncated. Add a tighter WHERE clause or adjust "top" to see more.`
-        });
+      const result = await client.post("/_apis/wit/wiql", { query }, { project, query: { $top: cap } });
+      if (Array.isArray(result?.workItems)) {
+        const refs = result.workItems.filter(
+          (r) => typeof r?.id === "number"
+        );
+        const total = refs.length;
+        const ids = refs.slice(0, cap).map((r) => r.id);
+        if (ids.length === 0) return asTicketList([], { total: 0 });
+        const items = await client.workItemsBatch(ids, LIST_FIELDS);
+        const byId = new Map(items.map((it) => [it.id, it]));
+        const ordered = ids.map((id) => byId.get(id)).filter((it) => it !== void 0);
+        return asTicketList(ordered, { total });
       }
-      return out;
+      const relations = result?.workItemRelations ?? [];
+      const cleaned = cleanAdo(result);
+      const note = relations.length >= cap ? `
+
+Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : "";
+      return textResult(JSON.stringify(cleaned) + note);
     }
   );
   server.registerTool(
@@ -31628,7 +31713,9 @@ function configureWorkItemsTools(server, deps) {
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         type: external_exports.string().min(1).describe("Work item type, e.g. Bug, Task, User Story"),
-        fields: external_exports.record(external_exports.string(), external_exports.unknown()).refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" }).describe('Field map keyed by reference name, e.g. {"System.Title": "..."}')
+        fields: external_exports.record(external_exports.string(), external_exports.unknown()).refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" }).describe(
+          'Field map keyed by ADO field reference names. Common fields: "System.Title" (required), "System.Description", "System.AssignedTo" (display name), "System.AreaPath", "System.IterationPath", "System.Tags", "Microsoft.VSTS.Common.Priority" (1-4), "Microsoft.VSTS.Common.Severity", "Microsoft.VSTS.TCM.ReproSteps" (for Bugs), "System.State". Example: {"System.Title": "Fix login bug", "System.AssignedTo": "Alice Smith"}'
+        )
       }
     },
     async ({ project, type, fields }, extra) => {
@@ -31648,7 +31735,9 @@ function configureWorkItemsTools(server, deps) {
       description: "Update fields on an existing work item by id.",
       inputSchema: {
         id: external_exports.number().int().positive().describe("Work item id"),
-        fields: external_exports.record(external_exports.string(), external_exports.unknown()).refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" }).describe('Field map keyed by reference name, e.g. {"System.State": "Active"}')
+        fields: external_exports.record(external_exports.string(), external_exports.unknown()).refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" }).describe(
+          'Field map keyed by ADO field reference names. Common fields: "System.State" (e.g. "Active", "Resolved", "Closed"), "System.AssignedTo" (display name), "System.Title", "System.Description", "System.Tags", "System.AreaPath", "System.IterationPath", "Microsoft.VSTS.Common.Priority" (1-4), "Microsoft.VSTS.Common.ResolvedReason", "System.Reason". Example: {"System.State": "Active", "System.AssignedTo": "Bob Jones"}'
+        )
       }
     },
     async ({ id, fields }, extra) => {
@@ -31712,6 +31801,7 @@ var RECURSION = ["none", "oneLevel", "full"];
 var MAX_PATH_LENGTH = 1024;
 var MAX_INLINE_FILE_BYTES = 1e6;
 var PR_STATUS = ["active", "abandoned", "completed", "all"];
+var MAX_INLINE_RESULT_BYTES2 = 5e4;
 function configureRepositoriesTools(server, deps) {
   server.registerTool(
     "repo_list",
@@ -31725,8 +31815,17 @@ function configureRepositoriesTools(server, deps) {
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get("/_apis/git/repositories", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get(
+        "/_apis/git/repositories",
+        { project }
+      );
+      const slim = (result.value ?? []).slice(0, cap).map((r) => ({
+        id: r["id"],
+        name: r["name"],
+        defaultBranch: r["defaultBranch"],
+        remoteUrl: r["remoteUrl"]
+      }));
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31746,7 +31845,17 @@ function configureRepositoriesTools(server, deps) {
         { project, query: { filter: "heads/" } },
         top
       );
-      return asCleanText(refs);
+      const withShortName = refs.map((ref) => {
+        if (ref && typeof ref === "object" && typeof ref.name === "string") {
+          const name = ref.name;
+          return {
+            ...ref,
+            name: name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name
+          };
+        }
+        return ref;
+      });
+      return asCleanText(withShortName);
     }
   );
   server.registerTool(
@@ -31808,7 +31917,16 @@ function configureRepositoriesTools(server, deps) {
           }
         }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const allItems = result.value ?? [];
+      const sliced = allItems.slice(0, cap);
+      if (allItems.length > cap) {
+        return textResult(
+          JSON.stringify(cleanAdo(sliced)) + `
+
+[Truncated: showing ${cap} of ${allItems.length} items. Use scopePath to narrow the listing.]`
+        );
+      }
+      return asCleanText(sliced);
     }
   );
   server.registerTool(
@@ -31850,14 +31968,19 @@ function configureRepositoriesTools(server, deps) {
       inputSchema: {
         repositoryId: external_exports.string().min(1).describe("Repository id or name"),
         commitId: external_exports.string().min(1).describe("Commit SHA"),
-        project: external_exports.string().min(1).optional().describe("Project name or ID")
+        project: external_exports.string().min(1).optional().describe("Project name or ID"),
+        includeChanges: external_exports.boolean().optional().describe(
+          "Include the list of changed files in the response (adds a 'changes' array to the commit)"
+        )
       }
     },
-    async ({ repositoryId, commitId, project }, extra) => {
+    async ({ repositoryId, commitId, project, includeChanges }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const query = {};
+      if (includeChanges) query["changeCount"] = 100;
       const commit = await client.get(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
-        { project }
+        { project, query }
       );
       return asCleanText(commit);
     }
@@ -31888,7 +32011,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31907,7 +32030,31 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project }
       );
-      return asCleanText(pr);
+      if (pr && typeof pr === "object" && typeof pr["description"] === "string") {
+        pr["description"] = truncateField(pr["description"], 2e3);
+      }
+      const cleaned = cleanAdo(pr);
+      const payload = JSON.stringify(cleaned);
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES2) {
+        const safe = {};
+        for (const key of [
+          "pullRequestId",
+          "title",
+          "status",
+          "createdBy",
+          "creationDate",
+          "sourceRefName",
+          "targetRefName",
+          "mergeStatus",
+          "isDraft",
+          "reviewers"
+        ]) {
+          if (pr && key in pr) safe[key] = cleanAdo(pr[key]);
+        }
+        safe["__truncated"] = true;
+        return textResult(JSON.stringify(safe));
+      }
+      return textResult(payload);
     }
   );
   server.registerTool(
@@ -31927,7 +32074,39 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const STRIP_THREAD_KEYS = /* @__PURE__ */ new Set([
+        "threadContext",
+        "pullRequestThreadContext",
+        "isDeleted",
+        "properties"
+      ]);
+      const STRIP_COMMENT_KEYS = /* @__PURE__ */ new Set(["usersLiked"]);
+      const threads = (result.value ?? []).slice(0, cap).map((thread) => {
+        const cleaned = {};
+        for (const [k, v] of Object.entries(thread)) {
+          if (STRIP_THREAD_KEYS.has(k)) continue;
+          if (k === "comments" && Array.isArray(v)) {
+            cleaned[k] = v.map((c) => {
+              const cc = {};
+              for (const [ck, cv] of Object.entries(c)) {
+                if (STRIP_COMMENT_KEYS.has(ck)) continue;
+                cc[ck] = cv;
+              }
+              return cc;
+            });
+          } else {
+            cleaned[k] = v;
+          }
+        }
+        return cleaned;
+      });
+      const payload = JSON.stringify(cleanAdo(threads));
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES2) {
+        return textResult(
+          `PR #${pullRequestId} has ${threads.length} threads but the payload is too large to return inline. The PR may have many long comments. Try fetching the PR summary via pr_get.`
+        );
+      }
+      return textResult(payload);
     }
   );
   server.registerTool(
@@ -31940,19 +32119,38 @@ function configurePullRequestTools(server, deps) {
         targetBranch: external_exports.string().min(1).describe("Target branch (short name or full ref)"),
         title: external_exports.string().min(1).describe("Pull request title"),
         description: external_exports.string().optional().describe("Pull request description"),
-        project: external_exports.string().min(1).optional().describe("Project name or ID")
+        project: external_exports.string().min(1).optional().describe("Project name or ID"),
+        reviewers: external_exports.array(external_exports.string().min(1)).optional().describe(
+          "Display names of reviewers to add (e.g. ['Alice Smith', 'Bob Jones']). Names are resolved to identity GUIDs automatically; unresolved names are skipped."
+        )
       }
     },
-    async ({ repositoryId, sourceBranch, targetBranch, title, description, project }, extra) => {
+    async ({ repositoryId, sourceBranch, targetBranch, title, description, project, reviewers }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const resolvedReviewers = [];
+      if (reviewers && reviewers.length > 0) {
+        for (const name of reviewers) {
+          try {
+            const result = await client.get(
+              "/_apis/identities",
+              { query: { searchFilter: "General", filterValue: name } }
+            );
+            const id = result?.value?.[0]?.["id"];
+            if (id) resolvedReviewers.push({ id });
+          } catch {
+          }
+        }
+      }
+      const body = {
+        sourceRefName: toRefName(sourceBranch),
+        targetRefName: toRefName(targetBranch),
+        title,
+        description
+      };
+      if (resolvedReviewers.length > 0) body["reviewers"] = resolvedReviewers;
       const pr = await client.post(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
-        {
-          sourceRefName: toRefName(sourceBranch),
-          targetRefName: toRefName(targetBranch),
-          title,
-          description
-        },
+        body,
         { project }
       );
       return asCleanText(pr);
@@ -31988,21 +32186,29 @@ function configurePullRequestTools(server, deps) {
         pullRequestId: external_exports.number().int().positive().describe("Pull request id"),
         status: external_exports.enum(["active", "abandoned", "completed"]).describe("New status: active, abandoned, or completed"),
         lastMergeSourceCommitId: external_exports.string().min(1).optional().describe(
-          "Current source branch tip commit id (NOT a merge commit); required by the server to complete a PR"
+          "Current source branch tip commit id; if omitted when completing, it is auto-fetched from the PR \u2014 you usually don't need to supply this."
         ),
         project: external_exports.string().min(1).optional().describe("Project name or ID")
       }
     },
     async ({ repositoryId, pullRequestId, status, lastMergeSourceCommitId, project }, extra) => {
-      if (status === "completed" && !lastMergeSourceCommitId) {
-        throw new Error(
-          "Completing a pull request requires 'lastMergeSourceCommitId' (the current source branch tip commit id)."
-        );
-      }
       const client = deps.clientFor(patFromExtra(extra));
+      let commitId = lastMergeSourceCommitId;
+      if (status === "completed" && !commitId) {
+        const pr2 = await client.get(
+          `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
+          { project }
+        );
+        commitId = pr2?.lastMergeSourceCommit?.commitId;
+        if (!commitId) {
+          throw new Error(
+            `Could not auto-fetch lastMergeSourceCommitId for PR ${pullRequestId}. The PR may not have a source commit yet (e.g. no commits pushed).`
+          );
+        }
+      }
       const body = { status };
-      if (lastMergeSourceCommitId) {
-        body["lastMergeSourceCommit"] = { commitId: lastMergeSourceCommitId };
+      if (commitId) {
+        body["lastMergeSourceCommit"] = { commitId };
       }
       const pr = await client.patch(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
@@ -32010,6 +32216,38 @@ function configurePullRequestTools(server, deps) {
         { project }
       );
       return asCleanText(pr);
+    }
+  );
+  server.registerTool(
+    "pr_list_mine",
+    {
+      description: "List YOUR open pull requests across all repositories in a project (or the whole collection). Use this to answer 'what PRs do I have open?' without needing to know the repository. Falls back to ADO_DEFAULT_PROJECT when no project is given. Falls back to listing all active PRs (not filtered by creator) if your identity cannot be resolved.",
+      inputSchema: {
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given; omit for collection-wide"),
+        status: external_exports.enum(PR_STATUS).optional().describe("Filter by PR status: active (default), abandoned, completed, or all"),
+        top: external_exports.number().int().positive().max(deps.config.maxResults).optional().describe("Maximum number of pull requests")
+      }
+    },
+    async ({ project, status, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const cap = boundLimit(top, deps.config.maxResults);
+      let creatorId;
+      try {
+        const profile = await client.get("/_apis/profile/profiles/me", {});
+        creatorId = profile?.id;
+      } catch {
+      }
+      const query = {
+        "searchCriteria.status": status ?? "active",
+        $top: cap
+      };
+      if (creatorId) query["searchCriteria.creatorId"] = creatorId;
+      const result = await client.get("/_apis/git/pullrequests", {
+        project: effectiveProject,
+        query
+      });
+      return asPRList((result.value ?? []).slice(0, cap));
     }
   );
 }
@@ -32137,7 +32375,7 @@ function configurePipelinesTools(server, deps) {
   server.registerTool(
     "build_get_logs",
     {
-      description: "Get build logs. Without logId, returns the list of log files (metadata) for the build so you can pick one. With logId, returns that log's content as lines (optionally a startLine..endLine range).",
+      description: "Get build logs. Two-step workflow: (1) Call WITHOUT logId to get the list of log files for the build \u2014 each has an id and a name like 'Initialize job' or 'Run tests'. (2) Call WITH the logId you want to read its full content as lines. Use startLine/endLine to page through large logs. Tip: look for the step where the build failed (non-zero exit code) and fetch that log.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         buildId: external_exports.number().int().positive().describe("Build id"),
@@ -32173,7 +32411,7 @@ function configureWorkTools(server, deps) {
   server.registerTool(
     "work_get_current_sprint",
     {
-      description: "Get the current sprint (iteration) for a project. Returns the sprint name and dates. Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      description: "Get the name and dates of the CURRENT (active) sprint for a project. Returns a single line. Use this to answer 'what sprint are we in?' or 'what is the current sprint?'. Falls back to ADO_DEFAULT_PROJECT when no project is given. To see ALL sprints (past and future), use work_list_iterations instead.",
       inputSchema: {
         project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         team: external_exports.string().min(1).optional().describe("Team name or ID; defaults to the project's default team")
@@ -32204,7 +32442,7 @@ Path: ${sprint.path ?? ""}`
   server.registerTool(
     "work_list_iterations",
     {
-      description: "List a team's iterations (sprints), optionally only the current one.",
+      description: "List a team's iterations (sprints). By default lists ALL iterations (past and future). Pass timeframe='current' to return only the active sprint (same as work_get_current_sprint but returns the raw object). To just know the current sprint name and dates, prefer work_get_current_sprint \u2014 it returns a single clean line.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         team: external_exports.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
@@ -32250,15 +32488,35 @@ Path: ${sprint.path ?? ""}`
       description: "Get a team's capacity (per-member capacity and days off) for an iteration.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
-        iterationId: external_exports.string().uuid().describe("Iteration id (GUID)"),
+        iterationId: external_exports.string().min(1).describe(
+          "Iteration GUID or iteration name (e.g. 'Sprint 48'); a name is resolved to its GUID automatically via the team's iteration list."
+        ),
         team: external_exports.string().min(1).optional().describe("Team name or ID; defaults to the project's default team")
       }
     },
     async ({ project, iterationId, team }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedId = iterationId;
+      if (!GUID_RE.test(iterationId)) {
+        const iters = await client.get(
+          workPath(team, "teamsettings/iterations"),
+          { project: effectiveProject }
+        );
+        const match = (iters.value ?? []).find(
+          (it) => it.name?.toLowerCase() === iterationId.toLowerCase()
+        );
+        if (!match?.id) {
+          throw new Error(
+            `No iteration named '${iterationId}' found in project '${effectiveProject ?? "(unknown)"}'. Use work_list_iterations to see available iterations and their ids.`
+          );
+        }
+        resolvedId = match.id;
+      }
       const capacity = await client.get(
-        workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
-        { project }
+        workPath(team, `teamsettings/iterations/${encodeURIComponent(resolvedId)}/capacities`),
+        { project: effectiveProject }
       );
       return asCleanText(capacity);
     }
@@ -32267,6 +32525,16 @@ Path: ${sprint.path ?? ""}`
 
 // src/tools/wiki.ts
 var MAX_PATH_LENGTH2 = 1024;
+function flattenWikiTree(page, depth = 0) {
+  const lines = [];
+  const pagePath = page["path"] ?? "?";
+  lines.push(`${"  ".repeat(depth)}${pagePath}`);
+  const sub = page["subPages"];
+  if (sub) {
+    for (const child of sub) lines.push(...flattenWikiTree(child, depth + 1));
+  }
+  return lines;
+}
 var RECURSION2 = ["none", "oneLevel", "oneLevelPlusNestedEmptyFolders", "full"];
 var MAX_INLINE_PAGE_BYTES = 1e6;
 function configureWikiTools(server, deps) {
@@ -32282,27 +32550,40 @@ function configureWikiTools(server, deps) {
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get("/_apis/wiki/wikis", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get(
+        "/_apis/wiki/wikis",
+        { project }
+      );
+      const slim = (result.value ?? []).slice(0, cap).map((w) => ({
+        id: w["id"],
+        name: w["name"],
+        type: w["type"]
+      }));
+      return asCleanText(slim);
     }
   );
   server.registerTool(
     "wiki_get_page",
     {
-      description: `Get a wiki page by path. Returns the page and its version as \`eTag\`; pass that \`eTag\` to wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted (metadata only).`,
+      description: `Get a wiki page by path, or list its sections. Two modes: (1) Read a page: omit recursionLevel (or set to 'none') \u2014 returns the markdown content and its eTag. (2) List sections/sub-pages: set recursionLevel to 'oneLevel' or 'full' \u2014 returns a compact indented path tree (NOT full objects). Use mode 2 to answer 'what sections does the wiki have?'. The eTag from mode 1 is required by wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted.`,
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         wikiIdentifier: external_exports.string().min(1).describe("Wiki id or name"),
         path: external_exports.string().min(1).max(MAX_PATH_LENGTH2).describe("Page path, e.g. /Home or /Docs/Setup"),
-        includeContent: external_exports.boolean().optional().describe("Include the page's markdown content (default true)"),
-        recursionLevel: external_exports.enum(RECURSION2).optional().describe("Include sub-pages: none (default), oneLevel, oneLevelPlusNestedEmptyFolders, or full")
+        includeContent: external_exports.boolean().optional().describe(
+          "Include the page's markdown content; defaults to true when reading a single page, false when listing sub-pages (recursionLevel set)"
+        ),
+        recursionLevel: external_exports.enum(RECURSION2).optional().describe(
+          "Sub-page listing depth: none (default \u2014 read single page), oneLevel, oneLevelPlusNestedEmptyFolders, or full (entire tree). When set, returns a compact path list instead of full objects."
+        )
       }
     },
     async ({ project, wikiIdentifier, path, includeContent, recursionLevel }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const listingTree = recursionLevel && recursionLevel !== "none";
       const query = {
         path,
-        includeContent: includeContent ?? true,
+        includeContent: includeContent ?? (listingTree ? false : true),
         recursionLevel
       };
       const { data, etag } = await client.requestWithEtag(
@@ -32311,6 +32592,15 @@ function configureWikiTools(server, deps) {
         void 0,
         { project, query }
       );
+      if (listingTree) {
+        const lines = flattenWikiTree(data);
+        return textResult(
+          `Wiki sections at '${path}' (${lines.length} page${lines.length === 1 ? "" : "s"}):
+` + lines.join("\n") + (etag ? `
+
+eTag: ${etag}` : "")
+        );
+      }
       const size = Buffer.byteLength(JSON.stringify(data), "utf8");
       if (size > MAX_INLINE_PAGE_BYTES) {
         const { content: _omitted, ...metadata } = data;
@@ -32326,28 +32616,39 @@ function configureWikiTools(server, deps) {
   server.registerTool(
     "wiki_create_or_update_page",
     {
-      description: "Create or edit a wiki page at a path. Omit `eTag` to create a new page; to edit an existing page, pass the `eTag` returned by wiki_get_page (Azure DevOps requires it to confirm you are editing the current revision). Returns the saved page and its new `eTag`.",
+      description: "Create or edit a wiki page at a path. IMPORTANT: To EDIT an existing page, you must first call wiki_get_page to retrieve its eTag, then pass that eTag here \u2014 Azure DevOps requires it for optimistic concurrency. Without eTag, edits to an existing page are rejected. To CREATE a new page, omit eTag entirely. Returns the saved page and its new eTag (save it if you plan to edit again).",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         wikiIdentifier: external_exports.string().min(1).describe("Wiki id or name"),
         path: external_exports.string().min(1).max(MAX_PATH_LENGTH2).describe("Page path, e.g. /Home or /Docs/Setup"),
         content: external_exports.string().describe("Markdown content for the page"),
-        eTag: external_exports.string().min(1).optional().describe("Current page version (the `eTag` from wiki_get_page); required to edit, omit to create")
+        eTag: external_exports.string().min(1).optional().describe(
+          "Version token from wiki_get_page \u2014 REQUIRED to edit an existing page, omit when creating a new one"
+        )
       }
     },
     async ({ project, wikiIdentifier, path, content, eTag }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const { data, etag } = await client.requestWithEtag(
-        "PUT",
-        `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
-        { content },
-        {
-          project,
-          query: { path },
-          headers: eTag ? { "If-Match": eTag } : void 0
+      try {
+        const { data, etag } = await client.requestWithEtag(
+          "PUT",
+          `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
+          { content },
+          {
+            project,
+            query: { path },
+            headers: eTag ? { "If-Match": eTag } : void 0
+          }
+        );
+        return asCleanText({ page: data, eTag: etag });
+      } catch (err) {
+        if (!eTag && err instanceof AdoApiError && err.status === 412) {
+          return textResult(
+            `Page '${path}' already exists. Call wiki_get_page to get its eTag, then retry wiki_create_or_update_page with that eTag set.`
+          );
         }
-      );
-      return asCleanText({ page: data, eTag: etag });
+        throw err;
+      }
     }
   );
 }
@@ -32357,7 +32658,7 @@ function configureTestPlansTools(server, deps) {
   server.registerTool(
     "testplan_list",
     {
-      description: "List the test plans in a project.",
+      description: "List test plans in a project. Returns plan ids and names. To list the suites inside a plan, pass the plan id to testplan_list_suites. Step 1 of 3: testplan_list \u2192 testplan_list_suites \u2192 testplan_list_cases.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         owner: external_exports.string().min(1).optional().describe("Filter to plans owned by this user (name or ID)"),
@@ -32375,7 +32676,7 @@ function configureTestPlansTools(server, deps) {
   server.registerTool(
     "testplan_list_suites",
     {
-      description: "List the test suites in a test plan. Pass asTreeView=true to get the suite hierarchy (parent/child) instead of a flat list.",
+      description: "List test suites in a test plan. Returns suite ids and names. To list test cases inside a suite, pass the suite id to testplan_list_cases. Step 2 of 3: testplan_list \u2192 testplan_list_suites \u2192 testplan_list_cases. Pass asTreeView=true to see the parent/child hierarchy.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         planId: external_exports.number().int().positive().describe("Test plan id"),
@@ -32397,7 +32698,7 @@ function configureTestPlansTools(server, deps) {
   server.registerTool(
     "testplan_list_cases",
     {
-      description: "List the test cases in a test suite of a plan.",
+      description: "List test cases in a test suite of a plan. Requires both planId (from testplan_list) and suiteId (from testplan_list_suites). Step 3 of 3: testplan_list \u2192 testplan_list_suites \u2192 testplan_list_cases.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         planId: external_exports.number().int().positive().describe("Test plan id"),

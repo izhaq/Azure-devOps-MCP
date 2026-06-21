@@ -80,7 +80,41 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
-const TOOLS = ["pr_list", "pr_get", "pr_list_threads", "pr_create", "pr_add_comment", "pr_update_status"];
+/** Fetch that returns a different body per (url, method), recording each call. */
+function routedSetup(routes: (url: string, method: string) => unknown) {
+  const calls: Call[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    const method = init?.method ?? "GET";
+    calls.push({
+      url: String(url),
+      method,
+      auth: headers?.["Authorization"] ?? "",
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      contentType: headers?.["Content-Type"] ?? "",
+    });
+    return new Response(JSON.stringify(routes(String(url), method)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  const { server, tools } = fakeServer();
+  configurePullRequestTools(
+    server,
+    createToolDeps({ config, logger, fetchImpl: impl }),
+  );
+  return { calls, tools };
+}
+
+const TOOLS = [
+  "pr_list",
+  "pr_get",
+  "pr_list_threads",
+  "pr_create",
+  "pr_add_comment",
+  "pr_update_status",
+  "pr_list_mine",
+];
 
 describe("configurePullRequestTools", () => {
   it("registers all pull request tools", () => {
@@ -101,14 +135,18 @@ describe("configurePullRequestTools", () => {
     expect(url).toContain("searchCriteria.targetRefName=refs%2Fheads%2Fmain");
   });
 
-  it("pr_list bounds results to maxResults", async () => {
+  it("pr_list bounds results to maxResults and returns compact text lines", async () => {
     const smallConfig: ServerConfig = { ...config, maxResults: 2 };
     const { calls, tools } = setup(
-      { value: [{ pullRequestId: 1 }, { pullRequestId: 2 }, { pullRequestId: 3 }] },
+      { value: [{ pullRequestId: 1, title: "PR one" }, { pullRequestId: 2, title: "PR two" }, { pullRequestId: 3, title: "PR three" }] },
       { config: smallConfig },
     );
-    const prs = parseResult(await tools.get("pr_list")!({ repositoryId: "repo1" }, {})) as unknown[];
-    expect(prs).toHaveLength(2);
+    const result = await tools.get("pr_list")!({ repositoryId: "repo1" }, {});
+    const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
+    // compact format: header + one line per PR
+    expect(text).toContain("#1");
+    expect(text).toContain("#2");
+    expect(text).not.toContain("#3");
     expect(calls[0]!.url).toContain("%24top=2");
   });
 
@@ -116,6 +154,48 @@ describe("configurePullRequestTools", () => {
     const { calls, tools } = setup({ pullRequestId: 42 });
     await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {});
     expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/pullrequests/42");
+  });
+
+  it("pr_get strips refs/heads/ prefix from sourceRefName and targetRefName", async () => {
+    const { tools } = setup({
+      pullRequestId: 42,
+      sourceRefName: "refs/heads/feature/my-branch",
+      targetRefName: "refs/heads/main",
+    });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as { sourceRefName: string; targetRefName: string };
+    expect(pr.sourceRefName).toBe("feature/my-branch");
+    expect(pr.targetRefName).toBe("main");
+  });
+
+  it("pr_get truncates a very long description", async () => {
+    const longDesc = "d".repeat(5000);
+    const { tools } = setup({ pullRequestId: 42, description: longDesc });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as { description: string };
+    expect(pr.description).toContain("truncated");
+    expect(pr.description.length).toBeLessThan(longDesc.length);
+  });
+
+  it("pr_get returns key fields only when the payload exceeds the inline budget", async () => {
+    const reviewers = Array.from({ length: 1000 }, (_, i) => ({
+      displayName: `Reviewer ${"x".repeat(80)} ${i}`,
+      vote: 0,
+    }));
+    const { tools } = setup({
+      pullRequestId: 42,
+      title: "Big PR",
+      status: "active",
+      reviewers,
+    });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as Record<string, unknown>;
+    expect(pr["__truncated"]).toBe(true);
+    expect(pr["pullRequestId"]).toBe(42);
+    expect(pr["title"]).toBe("Big PR");
   });
 
   it("pr_list_threads lists threads for a pull request", async () => {
@@ -134,6 +214,47 @@ describe("configurePullRequestTools", () => {
       await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
     ) as unknown[];
     expect(threads).toHaveLength(2);
+  });
+
+  it("pr_list_threads strips noisy thread and comment fields", async () => {
+    const { tools } = setup({
+      value: [
+        {
+          id: 7,
+          status: "active",
+          threadContext: { filePath: "/x.ts" },
+          pullRequestThreadContext: { iterationContext: {} },
+          isDeleted: false,
+          properties: { foo: "bar" },
+          comments: [
+            { id: 1, content: "hi", usersLiked: [{ displayName: "A" }], author: { displayName: "B" } },
+          ],
+        },
+      ],
+    });
+    const threads = parseResult(
+      await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as Array<Record<string, unknown>>;
+    const thread = threads[0]!;
+    expect(thread).not.toHaveProperty("threadContext");
+    expect(thread).not.toHaveProperty("pullRequestThreadContext");
+    expect(thread).not.toHaveProperty("isDeleted");
+    expect(thread).not.toHaveProperty("properties");
+    expect(thread).toHaveProperty("status", "active");
+    const comment = (thread["comments"] as Array<Record<string, unknown>>)[0]!;
+    expect(comment).not.toHaveProperty("usersLiked");
+    // cleanAdo flattens the identity object to the display name.
+    expect(comment["author"]).toBe("B");
+  });
+
+  it("pr_list_threads returns a summary when the payload exceeds the inline budget", async () => {
+    const big = "x".repeat(60_000);
+    const { tools } = setup({ value: [{ id: 1, comments: [{ id: 1, content: big }] }] });
+    const res = (await tools.get("pr_list_threads")!(
+      { repositoryId: "repo1", pullRequestId: 42 },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content[0]!.text).toContain("too large to return inline");
   });
 
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
@@ -173,6 +294,69 @@ describe("configurePullRequestTools", () => {
     });
   });
 
+  it("pr_create resolves reviewer names to identity ids and adds them to the body", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      if (url.includes("/_apis/identities")) return { value: [{ id: "rev-guid-1" }] };
+      if (method === "POST") return { pullRequestId: 9 };
+      return {};
+    });
+    await tools.get("pr_create")!(
+      {
+        repositoryId: "repo1",
+        sourceBranch: "feature/x",
+        targetBranch: "main",
+        title: "Add x",
+        reviewers: ["Alice Smith"],
+      },
+      {},
+    );
+    const idCall = calls.find((c) => c.url.includes("/_apis/identities"))!;
+    expect(idCall.url).toContain("filterValue=Alice");
+    const post = calls.find((c) => c.method === "POST")!;
+    expect((post.body as { reviewers?: unknown }).reviewers).toEqual([{ id: "rev-guid-1" }]);
+  });
+
+  it("pr_create skips unresolved reviewers and omits reviewers from the body", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      if (url.includes("/_apis/identities")) return { value: [] };
+      if (method === "POST") return { pullRequestId: 9 };
+      return {};
+    });
+    await tools.get("pr_create")!(
+      {
+        repositoryId: "repo1",
+        sourceBranch: "feature/x",
+        targetBranch: "main",
+        title: "Add x",
+        reviewers: ["Ghost User"],
+      },
+      {},
+    );
+    const post = calls.find((c) => c.method === "POST")!;
+    expect(post.body).not.toHaveProperty("reviewers");
+  });
+
+  it("pr_list_mine resolves the current user and filters by creatorId", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/profile/profiles/me")) return { id: "me-guid" };
+      return { value: [{ pullRequestId: 1 }] };
+    });
+    await tools.get("pr_list_mine")!({ project: "Proj" }, {});
+    const listCall = calls.find((c) => c.url.includes("/_apis/git/pullrequests"))!;
+    expect(listCall.url).toContain("searchCriteria.status=active");
+    expect(listCall.url).toContain("searchCriteria.creatorId=me-guid");
+  });
+
+  it("pr_list_mine still lists PRs when the profile id cannot be resolved", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/profile/profiles/me")) return {};
+      return { value: [{ pullRequestId: 1 }] };
+    });
+    await tools.get("pr_list_mine")!({ project: "Proj" }, {});
+    const listCall = calls.find((c) => c.url.includes("/_apis/git/pullrequests"))!;
+    expect(listCall.url).not.toContain("creatorId");
+  });
+
   it("pr_add_comment POSTs a new thread with the comment text", async () => {
     const { calls, tools } = setup({ id: 11 });
     await tools.get("pr_add_comment")!(
@@ -199,15 +383,34 @@ describe("configurePullRequestTools", () => {
     expect(call.body).toEqual({ status: "abandoned" });
   });
 
-  it("pr_update_status rejects completing without a source commit id (no REST call made)", async () => {
-    const { calls, tools } = setup({ pullRequestId: 5 });
+  it("pr_update_status auto-fetches lastMergeSourceCommit when completing without an id", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      // PATCH completes the PR; GET fetches the source commit id.
+      if (method === "PATCH") return { pullRequestId: 5, status: "completed" };
+      return { lastMergeSourceCommit: { commitId: "tip999" } };
+    });
+    await tools.get("pr_update_status")!(
+      { repositoryId: "repo1", pullRequestId: 5, status: "completed" },
+      {},
+    );
+    // First a GET to read the tip commit, then a PATCH carrying it.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[1]!.method).toBe("PATCH");
+    expect(calls[1]!.body).toEqual({
+      status: "completed",
+      lastMergeSourceCommit: { commitId: "tip999" },
+    });
+  });
+
+  it("pr_update_status throws when the PR has no source commit to auto-fetch", async () => {
+    const { tools } = routedSetup((url, method) => (method === "PATCH" ? {} : { pullRequestId: 5 }));
     await expect(
       tools.get("pr_update_status")!(
         { repositoryId: "repo1", pullRequestId: 5, status: "completed" },
         {},
       ),
-    ).rejects.toThrow(/requires 'lastMergeSourceCommitId'/);
-    expect(calls).toHaveLength(0);
+    ).rejects.toThrow(/Could not auto-fetch lastMergeSourceCommitId/);
   });
 
   it("pr_update_status includes lastMergeSourceCommit when completing with a source commit id", async () => {
