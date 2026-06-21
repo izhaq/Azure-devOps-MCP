@@ -16,9 +16,10 @@ function Read-WithDefault {
 }
 
 # Prompt for each setting
-$serverUrl  = Read-WithDefault "Azure DevOps Server URL" "https://azuredevops.yourcompany.local"
-$collection = Read-WithDefault "Collection name"         "DefaultCollection"
-$apiVersion = Read-WithDefault "API version"             "7.1"
+$serverUrl      = Read-WithDefault "Azure DevOps Server URL" "https://azuredevops.yourcompany.local"
+$collection     = Read-WithDefault "Collection name"         "DefaultCollection"
+$apiVersion     = Read-WithDefault "API version"             "7.1"
+$defaultProject = Read-WithDefault "Default project name (used when you ask about sprints, iterations, etc. without specifying a project)" ""
 
 Write-Host ""
 Write-Host "Your PAT (Personal Access Token) - input is hidden." -ForegroundColor Yellow
@@ -36,10 +37,13 @@ if ($pat.Trim().Length -eq 0) {
 }
 
 # Save permanently to the current user's Windows environment
-[Environment]::SetEnvironmentVariable("ADO_SERVER_URL",               $serverUrl,  "User")
-[Environment]::SetEnvironmentVariable("ADO_COLLECTION",               $collection, "User")
-[Environment]::SetEnvironmentVariable("ADO_API_VERSION",              $apiVersion, "User")
-[Environment]::SetEnvironmentVariable("ADO_PAT",                      $pat,        "User")
+[Environment]::SetEnvironmentVariable("ADO_SERVER_URL",               $serverUrl,      "User")
+[Environment]::SetEnvironmentVariable("ADO_COLLECTION",               $collection,     "User")
+[Environment]::SetEnvironmentVariable("ADO_API_VERSION",              $apiVersion,     "User")
+[Environment]::SetEnvironmentVariable("ADO_PAT",                      $pat,            "User")
+if ($defaultProject -ne "") {
+    [Environment]::SetEnvironmentVariable("ADO_DEFAULT_PROJECT",      $defaultProject, "User")
+}
 # Required because the corporate ADO server uses an internal CA not trusted by Node.js.
 # Safe on a private internal network where you control both ends of the connection.
 [Environment]::SetEnvironmentVariable("NODE_TLS_REJECT_UNAUTHORIZED", "0",         "User")
@@ -51,6 +55,7 @@ $env:ADO_COLLECTION               = $collection
 $env:ADO_API_VERSION              = $apiVersion
 $env:ADO_PAT                      = $pat
 $env:NODE_TLS_REJECT_UNAUTHORIZED = "0"
+if ($defaultProject -ne "") { $env:ADO_DEFAULT_PROJECT = $defaultProject }
 
 Write-Host ""
 Write-Host "All done! Settings saved permanently for your user account." -ForegroundColor Green

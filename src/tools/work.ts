@@ -48,10 +48,11 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     async ({ project, team, timeframe, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const query: Record<string, QueryValue> = { $timeframe: timeframe };
       const result = await client.get<{ value?: unknown[] }>(
         workPath(team, "teamsettings/iterations"),
-        { project, query },
+        { project: effectiveProject, query },
       );
       return asCleanText((result.value ?? []).slice(0, cap));
     },
@@ -78,8 +79,9 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     async ({ project, team, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
-        project,
+        project: effectiveProject,
       });
       return asCleanText((result.value ?? []).slice(0, cap));
     },

@@ -29,6 +29,12 @@ export interface WorkItemQueryOptions {
   allStates?: boolean;
   /** Substring match on `System.Title`. */
   titleContains?: string;
+  /**
+   * Iteration (sprint) filter. Pass `"current"` to use the ADO `@currentIteration`
+   * macro (resolves to the default team's active sprint server-side). Pass an exact
+   * iteration path string (e.g. `"MyProject\\Sprint 48"`) to pin a specific sprint.
+   */
+  iteration?: string;
 }
 
 /** Escape a value for a single-quoted WIQL string literal. */
@@ -61,6 +67,16 @@ export function buildWorkItemQuery(options: WorkItemQueryOptions = {}): string {
 
   if (options.titleContains) {
     conditions.push(`[System.Title] CONTAINS ${quote(options.titleContains)}`);
+  }
+
+  if (options.iteration) {
+    if (options.iteration === "current") {
+      // @currentIteration is a server-side macro that resolves to the default
+      // team's active sprint. Requires the WIQL request to be project-scoped.
+      conditions.push("[System.IterationPath] = @currentIteration");
+    } else {
+      conditions.push(`[System.IterationPath] = ${quote(options.iteration)}`);
+    }
   }
 
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";

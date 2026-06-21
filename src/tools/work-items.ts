@@ -155,11 +155,20 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
           .min(1)
           .optional()
           .describe("Substring to match in the title"),
+        iteration: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Sprint/iteration filter: 'current' for the active sprint, or an exact iteration path e.g. 'MyProject\\\\Sprint 48'",
+          ),
         project: z
           .string()
           .min(1)
           .optional()
-          .describe("Project to scope to; omit for collection-wide"),
+          .describe(
+            "Project to scope to; falls back to ADO_DEFAULT_PROJECT if set, otherwise collection-wide",
+          ),
         top: z
           .number()
           .int()
@@ -168,9 +177,13 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
           .describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)"),
       },
     },
-    async ({ mine, assignedTo, state, titleContains, project, top }, extra) => {
+    async ({ mine, assignedTo, state, titleContains, iteration, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+
+      // Project: caller-supplied wins; fall back to ADO_DEFAULT_PROJECT so the
+      // model doesn't need to know the project name for common queries.
+      const effectiveProject = project ?? deps.config.defaultProject;
 
       // "Mine" unless an explicit assignee is named. An explicit `mine: true`
       // wins over `assignedTo` (matching buildWorkItemQuery's documented
@@ -204,6 +217,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         states,
         allStates,
         titleContains,
+        iteration,
       });
 
       // The WIQL id-query is intentionally *not* capped with $top: ids are
@@ -213,7 +227,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       const result = await client.post<{ workItems?: Array<{ id?: number }> }>(
         "/_apis/wit/wiql",
         { query: wiql },
-        { project },
+        { project: effectiveProject },
       );
       const refs = (result?.workItems ?? []).filter(
         (r): r is { id: number } => typeof r.id === "number",

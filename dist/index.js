@@ -31447,6 +31447,13 @@ function buildWorkItemQuery(options = {}) {
   if (options.titleContains) {
     conditions.push(`[System.Title] CONTAINS ${quote(options.titleContains)}`);
   }
+  if (options.iteration) {
+    if (options.iteration === "current") {
+      conditions.push("[System.IterationPath] = @currentIteration");
+    } else {
+      conditions.push(`[System.IterationPath] = ${quote(options.iteration)}`);
+    }
+  }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
   return `SELECT [System.Id] FROM WorkItems${where} ORDER BY [System.ChangedDate] DESC`;
 }
@@ -31527,13 +31534,19 @@ function configureWorkItemsTools(server, deps) {
         assignedTo: external_exports.string().min(1).optional().describe("Assignee display name to match (resolved server-side; substring match)"),
         state: external_exports.string().min(1).optional().describe("State filter: 'open' (default), 'all', or a comma-separated set e.g. 'Active,New'"),
         titleContains: external_exports.string().min(1).optional().describe("Substring to match in the title"),
-        project: external_exports.string().min(1).optional().describe("Project to scope to; omit for collection-wide"),
+        iteration: external_exports.string().min(1).optional().describe(
+          "Sprint/iteration filter: 'current' for the active sprint, or an exact iteration path e.g. 'MyProject\\\\Sprint 48'"
+        ),
+        project: external_exports.string().min(1).optional().describe(
+          "Project to scope to; falls back to ADO_DEFAULT_PROJECT if set, otherwise collection-wide"
+        ),
         top: external_exports.number().int().positive().optional().describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)")
       }
     },
-    async ({ mine, assignedTo, state, titleContains, project, top }, extra) => {
+    async ({ mine, assignedTo, state, titleContains, iteration, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const useMine = mine ?? !assignedTo;
       let assignedToOpt;
       if (!useMine && assignedTo) {
@@ -31553,12 +31566,13 @@ function configureWorkItemsTools(server, deps) {
         assignedTo: assignedToOpt,
         states,
         allStates,
-        titleContains
+        titleContains,
+        iteration
       });
       const result = await client.post(
         "/_apis/wit/wiql",
         { query: wiql },
-        { project }
+        { project: effectiveProject }
       );
       const refs = (result?.workItems ?? []).filter(
         (r) => typeof r.id === "number"
@@ -32169,10 +32183,11 @@ function configureWorkTools(server, deps) {
     async ({ project, team, timeframe, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const query = { $timeframe: timeframe };
       const result = await client.get(
         workPath(team, "teamsettings/iterations"),
-        { project, query }
+        { project: effectiveProject, query }
       );
       return asCleanText((result.value ?? []).slice(0, cap));
     }
@@ -32190,8 +32205,9 @@ function configureWorkTools(server, deps) {
     async ({ project, team, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const result = await client.get(workPath(team, "backlogs"), {
-        project
+        project: effectiveProject
       });
       return asCleanText((result.value ?? []).slice(0, cap));
     }
