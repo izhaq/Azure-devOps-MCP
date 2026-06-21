@@ -29,9 +29,10 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     "work_get_current_sprint",
     {
       description:
-        "Get the current sprint (iteration) for a project. Returns the sprint name and dates. " +
-        "Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. " +
-        "Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+        "Get the name and dates of the CURRENT (active) sprint for a project. Returns a single line. " +
+        "Use this to answer 'what sprint are we in?' or 'what is the current sprint?'. " +
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given. " +
+        "To see ALL sprints (past and future), use work_list_iterations instead.",
       inputSchema: {
         project: z.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
@@ -66,7 +67,11 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "work_list_iterations",
     {
-      description: "List a team's iterations (sprints), optionally only the current one.",
+      description:
+        "List a team's iterations (sprints). By default lists ALL iterations (past and future). " +
+        "Pass timeframe='current' to return only the active sprint (same as work_get_current_sprint " +
+        "but returns the raw object). To just know the current sprint name and dates, prefer " +
+        "work_get_current_sprint — it returns a single clean line.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
