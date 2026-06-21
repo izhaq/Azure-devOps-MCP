@@ -162,6 +162,47 @@ describe("configurePullRequestTools", () => {
     expect(threads).toHaveLength(2);
   });
 
+  it("pr_list_threads strips noisy thread and comment fields", async () => {
+    const { tools } = setup({
+      value: [
+        {
+          id: 7,
+          status: "active",
+          threadContext: { filePath: "/x.ts" },
+          pullRequestThreadContext: { iterationContext: {} },
+          isDeleted: false,
+          properties: { foo: "bar" },
+          comments: [
+            { id: 1, content: "hi", usersLiked: [{ displayName: "A" }], author: { displayName: "B" } },
+          ],
+        },
+      ],
+    });
+    const threads = parseResult(
+      await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as Array<Record<string, unknown>>;
+    const thread = threads[0]!;
+    expect(thread).not.toHaveProperty("threadContext");
+    expect(thread).not.toHaveProperty("pullRequestThreadContext");
+    expect(thread).not.toHaveProperty("isDeleted");
+    expect(thread).not.toHaveProperty("properties");
+    expect(thread).toHaveProperty("status", "active");
+    const comment = (thread["comments"] as Array<Record<string, unknown>>)[0]!;
+    expect(comment).not.toHaveProperty("usersLiked");
+    // cleanAdo flattens the identity object to the display name.
+    expect(comment["author"]).toBe("B");
+  });
+
+  it("pr_list_threads returns a summary when the payload exceeds the inline budget", async () => {
+    const big = "x".repeat(60_000);
+    const { tools } = setup({ value: [{ id: 1, comments: [{ id: 1, content: big }] }] });
+    const res = (await tools.get("pr_list_threads")!(
+      { repositoryId: "repo1", pullRequestId: 42 },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content[0]!.text).toContain("too large to return inline");
+  });
+
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
     const { calls, tools } = setup({ value: [] });
     const extra = { requestInfo: { headers: { "x-ado-pat": "req-pat" } } };

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asCleanText, toRefName } from "./_shared.js";
+import { asCleanText, cleanAdo, textResult, toRefName } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -45,6 +45,14 @@ const MAX_INLINE_FILE_BYTES = 1_000_000;
 
 /** Pull request states accepted by list/update (ADO `GitPullRequestStatus`). */
 const PR_STATUS = ["active", "abandoned", "completed", "all"] as const;
+
+/**
+ * Inline payload budget for PR read paths (threads, get). If a cleaned payload
+ * exceeds this, return a short summary instead of overflowing a small model's
+ * context. Measured in UTF-8 bytes; mirrors the 50 000-byte size-guard
+ * convention in `work-items.ts` / `wiki.ts`.
+ */
+const MAX_INLINE_RESULT_BYTES = 50_000;
 
 export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
@@ -338,11 +346,50 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
       // one response. Bound the RESULT to maxResults for consistency with the
       // other list tools so a noisy PR can't blow up the payload.
       const cap = boundLimit(undefined, deps.config.maxResults);
-      const result = await client.get<{ value?: unknown[] }>(
+      const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+
+      // Strip per-thread noise that is never useful to the model: file-position
+      // context, nested iteration refs, the always-false isDeleted flag, the
+      // properties bag, and per-comment usersLiked lists.
+      const STRIP_THREAD_KEYS = new Set([
+        "threadContext",
+        "pullRequestThreadContext",
+        "isDeleted",
+        "properties",
+      ]);
+      const STRIP_COMMENT_KEYS = new Set(["usersLiked"]);
+
+      const threads = (result.value ?? []).slice(0, cap).map((thread) => {
+        const cleaned: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(thread)) {
+          if (STRIP_THREAD_KEYS.has(k)) continue;
+          if (k === "comments" && Array.isArray(v)) {
+            cleaned[k] = v.map((c: Record<string, unknown>) => {
+              const cc: Record<string, unknown> = {};
+              for (const [ck, cv] of Object.entries(c)) {
+                if (STRIP_COMMENT_KEYS.has(ck)) continue;
+                cc[ck] = cv;
+              }
+              return cc;
+            });
+          } else {
+            cleaned[k] = v;
+          }
+        }
+        return cleaned;
+      });
+
+      const payload = JSON.stringify(cleanAdo(threads));
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        return textResult(
+          `PR #${pullRequestId} has ${threads.length} threads but the payload is too large to ` +
+            `return inline. The PR may have many long comments. Try fetching the PR summary via pr_get.`,
+        );
+      }
+      return textResult(payload);
     },
   );
 
