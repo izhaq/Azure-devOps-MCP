@@ -101,6 +101,42 @@ describe("configureWikiTools (read)", () => {
     expect(wikis).toHaveLength(2);
   });
 
+  it("wiki_list slims objects to id/name/type only", async () => {
+    const { tools } = setup({
+      value: [{ id: "w1", name: "project-wiki", type: "projectWiki", repositoryId: "r1", mappedPath: "/", remoteUrl: "https://..." }],
+    });
+    const wikis = parseResult(await tools.get("wiki_list")!({ project: "Proj" }, {})) as Array<Record<string, unknown>>;
+    expect(wikis[0]).toEqual({ id: "w1", name: "project-wiki", type: "projectWiki" });
+    expect(wikis[0]).not.toHaveProperty("repositoryId");
+    expect(wikis[0]).not.toHaveProperty("remoteUrl");
+  });
+
+  it("wiki_get_page with recursionLevel returns a compact path tree, not full objects", async () => {
+    const { calls, tools } = setup(
+      {
+        path: "/",
+        subPages: [
+          { path: "/Home", subPages: [] },
+          { path: "/Docs", subPages: [{ path: "/Docs/Setup", subPages: [] }] },
+        ],
+      },
+      { etag: '"e"' },
+    );
+    const result = (await tools.get("wiki_get_page")!(
+      { project: "Proj", wikiIdentifier: "MyWiki", path: "/", recursionLevel: "full" },
+      {},
+    )) as { content: Array<{ text: string }> };
+    const text = result.content[0]!.text;
+    // Should be plain text paths, not JSON objects
+    expect(text).toContain("/Home");
+    expect(text).toContain("/Docs");
+    expect(text).toContain("/Docs/Setup");
+    expect(text).not.toContain("gitItemPath");
+    expect(text).not.toContain("isParentPage");
+    // Content should default to false when recursionLevel is set
+    expect(calls[0]!.url).toContain("includeContent=false");
+  });
+
   it("wiki_get_page requests the page with path + includeContent and surfaces the ETag", async () => {
     const { calls, tools } = setup(
       { path: "/Home", content: "# Hello" },

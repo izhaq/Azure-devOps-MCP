@@ -32525,6 +32525,16 @@ Path: ${sprint.path ?? ""}`
 
 // src/tools/wiki.ts
 var MAX_PATH_LENGTH2 = 1024;
+function flattenWikiTree(page, depth = 0) {
+  const lines = [];
+  const pagePath = page["path"] ?? "?";
+  lines.push(`${"  ".repeat(depth)}${pagePath}`);
+  const sub = page["subPages"];
+  if (sub) {
+    for (const child of sub) lines.push(...flattenWikiTree(child, depth + 1));
+  }
+  return lines;
+}
 var RECURSION2 = ["none", "oneLevel", "oneLevelPlusNestedEmptyFolders", "full"];
 var MAX_INLINE_PAGE_BYTES = 1e6;
 function configureWikiTools(server, deps) {
@@ -32540,27 +32550,40 @@ function configureWikiTools(server, deps) {
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get("/_apis/wiki/wikis", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get(
+        "/_apis/wiki/wikis",
+        { project }
+      );
+      const slim = (result.value ?? []).slice(0, cap).map((w) => ({
+        id: w["id"],
+        name: w["name"],
+        type: w["type"]
+      }));
+      return asCleanText(slim);
     }
   );
   server.registerTool(
     "wiki_get_page",
     {
-      description: `Get a wiki page by path. Returns the page and its version as \`eTag\`; pass that \`eTag\` to wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted (metadata only).`,
+      description: `Get a wiki page by path, or list its sections. Two modes: (1) Read a page: omit recursionLevel (or set to 'none') \u2014 returns the markdown content and its eTag. (2) List sections/sub-pages: set recursionLevel to 'oneLevel' or 'full' \u2014 returns a compact indented path tree (NOT full objects). Use mode 2 to answer 'what sections does the wiki have?'. The eTag from mode 1 is required by wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted.`,
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         wikiIdentifier: external_exports.string().min(1).describe("Wiki id or name"),
         path: external_exports.string().min(1).max(MAX_PATH_LENGTH2).describe("Page path, e.g. /Home or /Docs/Setup"),
-        includeContent: external_exports.boolean().optional().describe("Include the page's markdown content (default true)"),
-        recursionLevel: external_exports.enum(RECURSION2).optional().describe("Include sub-pages: none (default), oneLevel, oneLevelPlusNestedEmptyFolders, or full")
+        includeContent: external_exports.boolean().optional().describe(
+          "Include the page's markdown content; defaults to true when reading a single page, false when listing sub-pages (recursionLevel set)"
+        ),
+        recursionLevel: external_exports.enum(RECURSION2).optional().describe(
+          "Sub-page listing depth: none (default \u2014 read single page), oneLevel, oneLevelPlusNestedEmptyFolders, or full (entire tree). When set, returns a compact path list instead of full objects."
+        )
       }
     },
     async ({ project, wikiIdentifier, path, includeContent, recursionLevel }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const listingTree = recursionLevel && recursionLevel !== "none";
       const query = {
         path,
-        includeContent: includeContent ?? true,
+        includeContent: includeContent ?? (listingTree ? false : true),
         recursionLevel
       };
       const { data, etag } = await client.requestWithEtag(
@@ -32569,6 +32592,15 @@ function configureWikiTools(server, deps) {
         void 0,
         { project, query }
       );
+      if (listingTree) {
+        const lines = flattenWikiTree(data);
+        return textResult(
+          `Wiki sections at '${path}' (${lines.length} page${lines.length === 1 ? "" : "s"}):
+` + lines.join("\n") + (etag ? `
+
+eTag: ${etag}` : "")
+        );
+      }
       const size = Buffer.byteLength(JSON.stringify(data), "utf8");
       if (size > MAX_INLINE_PAGE_BYTES) {
         const { content: _omitted, ...metadata } = data;
