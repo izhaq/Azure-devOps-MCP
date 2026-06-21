@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asCleanText, cleanAdo, textResult, toRefName, truncateField } from "./_shared.js";
+import { asPRList, asCleanText, cleanAdo, textResult, toRefName, truncateField } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -77,8 +77,20 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
       // best-effort. Bound the RESULT by the same min(top ?? maxResults,
       // maxResults) cap getAll applies, so list tools stay consistent.
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get<{ value?: unknown[] }>("/_apis/git/repositories", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
+        "/_apis/git/repositories",
+        { project },
+      );
+      // Slim to the fields a model needs to identify repos and chain into other
+      // tools (pr_list, repo_list_branches, etc.). Full objects contain dozens
+      // of fields (capabilities, project nesting, sizes) that waste tokens.
+      const slim = (result.value ?? []).slice(0, cap).map((r) => ({
+        id: r["id"],
+        name: r["name"],
+        defaultBranch: r["defaultBranch"],
+        remoteUrl: r["remoteUrl"],
+      }));
+      return asCleanText(slim);
     },
   );
 
@@ -336,7 +348,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -642,7 +654,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         project: effectiveProject,
         query,
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     },
   );
 }

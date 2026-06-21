@@ -131,6 +131,36 @@ function identityName(value: unknown): string {
 }
 
 /**
+ * Render a PR list as one compact line per PR. Applies cleanAdo internally so
+ * identity objects are flattened and ref prefixes are already stripped. Use
+ * this on pr_list / pr_list_mine instead of dumping full PR objects.
+ *
+ * Format: `#42 "Title" — active · feature/x → main · Alice (3 reviewers)`
+ */
+export function asPRList(prs: unknown[], meta?: { total?: number }): ToolResult {
+  const shown = prs.length;
+  const total = meta?.total ?? shown;
+  const header =
+    total > shown
+      ? `Showing ${shown} of ${total} pull requests — raise "top" to see more.`
+      : `${shown} pull request${shown === 1 ? "" : "s"}.`;
+  const lines = (prs as Array<Record<string, unknown>>).map((raw) => {
+    const pr = cleanAdo(raw) as Record<string, unknown>;
+    const id = pr["pullRequestId"] ?? "?";
+    const title = (pr["title"] as string) ?? "(no title)";
+    const status = pr["isDraft"] === true ? "draft" : ((pr["status"] as string) ?? "?");
+    const source = (pr["sourceRefName"] as string) ?? "?";
+    const target = (pr["targetRefName"] as string) ?? "?";
+    const author = typeof pr["createdBy"] === "string" ? pr["createdBy"] : identityName(pr["createdBy"]);
+    const reviewers = pr["reviewers"] as unknown[] | undefined;
+    const rCount = reviewers?.length ?? 0;
+    const rSuffix = rCount > 0 ? ` · ${rCount} reviewer${rCount === 1 ? "" : "s"}` : "";
+    return `#${id} "${title}" — ${status} · ${source} → ${target} · ${author}${rSuffix}`;
+  });
+  return textResult([header, ...lines].join("\n"));
+}
+
+/**
  * Render a projected work-item list as one compact line per ticket plus a
  * leading "showing N of M" line. Each line includes id, type, title, state,
  * assignee, and creator (when different from the assignee) — enough for a

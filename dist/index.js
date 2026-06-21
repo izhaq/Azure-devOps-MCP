@@ -31413,6 +31413,25 @@ function identityName(value) {
   }
   return String(value);
 }
+function asPRList(prs, meta3) {
+  const shown = prs.length;
+  const total = meta3?.total ?? shown;
+  const header = total > shown ? `Showing ${shown} of ${total} pull requests \u2014 raise "top" to see more.` : `${shown} pull request${shown === 1 ? "" : "s"}.`;
+  const lines = prs.map((raw) => {
+    const pr = cleanAdo(raw);
+    const id = pr["pullRequestId"] ?? "?";
+    const title = pr["title"] ?? "(no title)";
+    const status = pr["isDraft"] === true ? "draft" : pr["status"] ?? "?";
+    const source = pr["sourceRefName"] ?? "?";
+    const target = pr["targetRefName"] ?? "?";
+    const author = typeof pr["createdBy"] === "string" ? pr["createdBy"] : identityName(pr["createdBy"]);
+    const reviewers = pr["reviewers"];
+    const rCount = reviewers?.length ?? 0;
+    const rSuffix = rCount > 0 ? ` \xB7 ${rCount} reviewer${rCount === 1 ? "" : "s"}` : "";
+    return `#${id} "${title}" \u2014 ${status} \xB7 ${source} \u2192 ${target} \xB7 ${author}${rSuffix}`;
+  });
+  return textResult([header, ...lines].join("\n"));
+}
 function asTicketList(items, meta3) {
   const shown = items.length;
   const total = meta3?.total ?? shown;
@@ -31796,8 +31815,17 @@ function configureRepositoriesTools(server, deps) {
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
-      const result = await client.get("/_apis/git/repositories", { project });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const result = await client.get(
+        "/_apis/git/repositories",
+        { project }
+      );
+      const slim = (result.value ?? []).slice(0, cap).map((r) => ({
+        id: r["id"],
+        name: r["name"],
+        defaultBranch: r["defaultBranch"],
+        remoteUrl: r["remoteUrl"]
+      }));
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31983,7 +32011,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32219,7 +32247,7 @@ function configurePullRequestTools(server, deps) {
         project: effectiveProject,
         query
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      return asPRList((result.value ?? []).slice(0, cap));
     }
   );
 }

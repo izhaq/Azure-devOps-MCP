@@ -135,14 +135,18 @@ describe("configurePullRequestTools", () => {
     expect(url).toContain("searchCriteria.targetRefName=refs%2Fheads%2Fmain");
   });
 
-  it("pr_list bounds results to maxResults", async () => {
+  it("pr_list bounds results to maxResults and returns compact text lines", async () => {
     const smallConfig: ServerConfig = { ...config, maxResults: 2 };
     const { calls, tools } = setup(
-      { value: [{ pullRequestId: 1 }, { pullRequestId: 2 }, { pullRequestId: 3 }] },
+      { value: [{ pullRequestId: 1, title: "PR one" }, { pullRequestId: 2, title: "PR two" }, { pullRequestId: 3, title: "PR three" }] },
       { config: smallConfig },
     );
-    const prs = parseResult(await tools.get("pr_list")!({ repositoryId: "repo1" }, {})) as unknown[];
-    expect(prs).toHaveLength(2);
+    const result = await tools.get("pr_list")!({ repositoryId: "repo1" }, {});
+    const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
+    // compact format: header + one line per PR
+    expect(text).toContain("#1");
+    expect(text).toContain("#2");
+    expect(text).not.toContain("#3");
     expect(calls[0]!.url).toContain("%24top=2");
   });
 
