@@ -31424,7 +31424,9 @@ function asTicketList(items, meta3) {
     const title = f["System.Title"] ?? "(no title)";
     const state = f["System.State"] ?? "?";
     const assignee = identityName(f["System.AssignedTo"]);
-    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}`;
+    const creator = identityName(f["System.CreatedBy"]);
+    const creatorSuffix = creator !== assignee && creator !== "Unassigned" ? ` \xB7 created by ${creator}` : "";
+    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}${creatorSuffix}`;
   });
   return textResult([header, ...lines].join("\n"));
 }
@@ -31513,7 +31515,8 @@ var LIST_FIELDS = [
   "System.Title",
   "System.State",
   "System.AssignedTo",
-  "System.WorkItemType"
+  "System.WorkItemType",
+  "System.CreatedBy"
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
 var MAX_INLINE_RESULT_BYTES = 5e4;

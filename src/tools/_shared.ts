@@ -132,9 +132,10 @@ function identityName(value: unknown): string {
 
 /**
  * Render a projected work-item list as one compact line per ticket plus a
- * leading "showing N of M" line. This is the token-shaped replacement for
- * dumping full JSON objects: a small model gets exactly id, type, title,
- * state, and assignee — enough to pick the next action — and nothing else.
+ * leading "showing N of M" line. Each line includes id, type, title, state,
+ * assignee, and creator (when different from the assignee) — enough for a
+ * small model to answer follow-up questions like "who assigned them?" without
+ * making additional tool calls.
  *
  * `meta.total` is the pre-cap match count (from the WIQL result) so the line
  * can tell the model when results were capped and to refine or paginate.
@@ -153,7 +154,11 @@ export function asTicketList(items: ProjectedWorkItem[], meta?: { total?: number
     const title = (f["System.Title"] as string) ?? "(no title)";
     const state = (f["System.State"] as string) ?? "?";
     const assignee = identityName(f["System.AssignedTo"]);
-    return `#${id} [${type}] ${title} — ${state} · ${assignee}`;
+    const creator = identityName(f["System.CreatedBy"]);
+    // Include creator only when it differs from the assignee — avoids redundant
+    // noise on self-created tickets while answering "by whom?" for the rest.
+    const creatorSuffix = creator !== assignee && creator !== "Unassigned" ? ` · created by ${creator}` : "";
+    return `#${id} [${type}] ${title} — ${state} · ${assignee}${creatorSuffix}`;
   });
   return textResult([header, ...lines].join("\n"));
 }

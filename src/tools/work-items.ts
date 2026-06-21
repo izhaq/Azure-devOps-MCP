@@ -13,6 +13,7 @@ const LIST_FIELDS = [
   "System.State",
   "System.AssignedTo",
   "System.WorkItemType",
+  "System.CreatedBy",
 ];
 
 /** Truncate `System.Description` (raw HTML) in the detail path; see Defect 1. */
