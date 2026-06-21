@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asCleanText } from "./_shared.js";
 
 /**
  * wiki domain: project wikis + pages.
@@ -51,7 +51,7 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get<{ value?: unknown[] }>("/_apis/wiki/wikis", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -95,13 +95,13 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
       const size = Buffer.byteLength(JSON.stringify(data), "utf8");
       if (size > MAX_INLINE_PAGE_BYTES) {
         const { content: _omitted, ...metadata } = data;
-        return asText({
+        return asCleanText({
           page: { ...metadata, contentOmitted: true, size },
           eTag: etag,
           message: `Page payload (${size} bytes) exceeds the ${MAX_INLINE_PAGE_BYTES}-byte inline limit; content omitted. Re-fetch with includeContent=false and recursionLevel=none for metadata only.`,
         });
       }
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     },
   );
 
@@ -137,7 +137,7 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
           headers: eTag ? { "If-Match": eTag } : undefined,
         },
       );
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     },
   );
 }

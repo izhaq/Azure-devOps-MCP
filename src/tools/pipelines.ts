@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText, toRefName } from "./_shared.js";
+import { asCleanText, toRefName } from "./_shared.js";
 
 /**
  * pipelines domain: Azure Pipelines (definitions) + Builds (runs).
@@ -76,7 +76,7 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
         project,
         query: { $top: cap },
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -99,7 +99,7 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
       const client = deps.clientFor(patFromExtra(extra));
       const query: Record<string, QueryValue> = { pipelineVersion };
       const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asText(pipeline);
+      return asCleanText(pipeline);
     },
   );
 
@@ -145,7 +145,7 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
         project,
         query,
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -161,7 +161,7 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
     async ({ project, buildId }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const build = await client.get(`/_apis/build/builds/${buildId}`, { project });
-      return asText(build);
+      return asCleanText(build);
     },
   );
 
@@ -191,7 +191,7 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
       const build = await client.post("/_apis/build/builds", body, { project });
-      return asText(build);
+      return asCleanText(build);
     },
   );
 
@@ -232,13 +232,13 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
           `/_apis/build/builds/${buildId}/logs`,
           { project },
         );
-        return asText(result.value ?? []);
+        return asCleanText(result.value ?? []);
       }
       const body = await client.get<unknown>(`/_apis/build/builds/${buildId}/logs/${logId}`, {
         project,
         query: { startLine, endLine },
       });
-      return asText(unwrapBuildLogLines(body));
+      return asCleanText(unwrapBuildLogLines(body));
     },
   );
 }

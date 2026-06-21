@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { toPreviewVersion } from "../shared/api-version.js";
-import { asText } from "./_shared.js";
+import { asCleanText } from "./_shared.js";
 
 /**
  * Core domain: projects and teams.
@@ -27,7 +27,7 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
     async ({ top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const projects = await client.getAll("/_apis/projects", {}, top);
-      return asText(projects);
+      return asCleanText(projects);
     },
   );
 
@@ -43,13 +43,13 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
       const client = deps.clientFor(patFromExtra(extra));
       if (project) {
         const teams = await client.getAll(`/_apis/projects/${encodeURIComponent(project)}/teams`);
-        return asText(teams);
+        return asCleanText(teams);
       }
       // Collection-wide listing requires the preview api-version.
       const teams = await client.getAll("/_apis/teams", {
         apiVersion: toPreviewVersion(deps.config.apiVersion, 3),
       });
-      return asText(teams);
+      return asCleanText(teams);
     },
   );
 }

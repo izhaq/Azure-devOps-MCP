@@ -11,6 +11,57 @@ export function toRefName(branch: string): string {
 /** The MCP tool result shape every formatter returns. */
 export type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
+/** ADO reviewer vote integer → human-readable label (0 = no vote, omitted). */
+const VOTE_LABELS = new Map<number, string>([
+  [10, "approved"],
+  [5, "approved with suggestions"],
+  [-5, "waiting for author"],
+  [-10, "rejected"],
+]);
+
+/**
+ * Recursively clean an ADO API response for model consumption:
+ * - Strip `_links` at every level (internal navigation URLs — never useful to the model).
+ * - Flatten ADO identity objects (those that carry a `displayName` property) to just
+ *   the display-name string, removing URL, GUID, uniqueName, imageUrl, and descriptor
+ *   noise. Exception: PR reviewer objects also carry `vote`; when the vote is non-zero
+ *   (i.e. not "no vote") it is appended as a readable label so approval state is
+ *   preserved: e.g. `"Alice Smith (approved)"`.
+ */
+export function cleanAdo(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(cleanAdo);
+
+  const obj = value as Record<string, unknown>;
+
+  // ADO identity object: has `displayName`. Reduce to name string (± vote label).
+  if ("displayName" in obj) {
+    const name = String(obj.displayName ?? "");
+    if ("vote" in obj && typeof obj.vote === "number" && obj.vote !== 0) {
+      const label = VOTE_LABELS.get(obj.vote) ?? String(obj.vote);
+      return `${name} (${label})`;
+    }
+    return name;
+  }
+
+  // Non-identity object: strip `_links`, recurse into remaining fields.
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "_links") continue;
+    result[key] = cleanAdo(val);
+  }
+  return result;
+}
+
+/**
+ * Apply {@link cleanAdo} then emit compact (no-indent) JSON. Use this on all
+ * read paths: it strips ADO navigation noise and saves 30-50% tokens vs the
+ * pretty-printed {@link asText}.
+ */
+export function asCleanText(data: unknown): ToolResult {
+  return textResult(JSON.stringify(cleanAdo(data)));
+}
+
 /**
  * Wrap a plain string in the MCP tool result shape. Exported so size-guard
  * fallbacks in the domain tools build the same shape instead of re-declaring

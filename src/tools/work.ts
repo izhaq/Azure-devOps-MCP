@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asCleanText } from "./_shared.js";
 
 /**
  * work domain: team boards/iterations (sprints), backlog levels, capacity.
@@ -53,7 +53,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
         workPath(team, "teamsettings/iterations"),
         { project, query },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -81,7 +81,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
         project,
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -101,7 +101,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
         workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
         { project },
       );
-      return asText(capacity);
+      return asCleanText(capacity);
     },
   );
 }

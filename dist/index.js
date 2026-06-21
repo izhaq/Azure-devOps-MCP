@@ -31325,14 +31325,36 @@ function toPreviewVersion(version2, revision) {
 function toRefName(branch) {
   return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
 }
+var VOTE_LABELS = /* @__PURE__ */ new Map([
+  [10, "approved"],
+  [5, "approved with suggestions"],
+  [-5, "waiting for author"],
+  [-10, "rejected"]
+]);
+function cleanAdo(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(cleanAdo);
+  const obj = value;
+  if ("displayName" in obj) {
+    const name = String(obj.displayName ?? "");
+    if ("vote" in obj && typeof obj.vote === "number" && obj.vote !== 0) {
+      const label = VOTE_LABELS.get(obj.vote) ?? String(obj.vote);
+      return `${name} (${label})`;
+    }
+    return name;
+  }
+  const result = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "_links") continue;
+    result[key] = cleanAdo(val);
+  }
+  return result;
+}
+function asCleanText(data) {
+  return textResult(JSON.stringify(cleanAdo(data)));
+}
 function textResult(text) {
   return { content: [{ type: "text", text }] };
-}
-function asText(data) {
-  return textResult(JSON.stringify(data, null, 2));
-}
-function asCompactText(data) {
-  return textResult(JSON.stringify(data));
 }
 function truncateField(value, max) {
   if (typeof value !== "string" || value.length <= max) return value;
@@ -31377,7 +31399,7 @@ function configureCoreTools(server, deps) {
     async ({ top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const projects = await client.getAll("/_apis/projects", {}, top);
-      return asText(projects);
+      return asCleanText(projects);
     }
   );
   server.registerTool(
@@ -31392,12 +31414,12 @@ function configureCoreTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       if (project) {
         const teams2 = await client.getAll(`/_apis/projects/${encodeURIComponent(project)}/teams`);
-        return asText(teams2);
+        return asCleanText(teams2);
       }
       const teams = await client.getAll("/_apis/teams", {
         apiVersion: toPreviewVersion(deps.config.apiVersion, 3)
       });
-      return asText(teams);
+      return asCleanText(teams);
     }
   );
 }
@@ -31439,37 +31461,25 @@ var LIST_FIELDS = [
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
 var MAX_INLINE_RESULT_BYTES = 5e4;
-function flattenIdentities(fields) {
-  const result = {};
-  for (const [key, value] of Object.entries(fields)) {
-    if (value !== null && typeof value === "object" && "displayName" in value) {
-      result[key] = value.displayName;
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
 function formatWorkItemDetail(item) {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
-    const { _links: _ignored, ...rest } = item;
-    const original = rest.fields ?? {};
-    let fields = { ...original };
+    const raw = item;
+    const fields = { ...raw.fields };
     if (typeof fields["System.Description"] === "string") {
       fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
     }
-    fields = flattenIdentities(fields);
-    shaped = { ...rest, fields };
+    shaped = { ...raw, fields };
   }
-  const bytes = Buffer.byteLength(JSON.stringify(shaped), "utf8");
+  const cleaned = cleanAdo(shaped);
+  const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
   if (bytes > MAX_INLINE_RESULT_BYTES) {
     const id = item?.id;
     return textResult(
       `Work item ${id ?? "?"} is too large to return inline (${bytes} bytes). Re-fetch only the fields you need via wit_get's "fields" argument, e.g. ["System.Title","System.State","System.AssignedTo"].`
     );
   }
-  return asCompactText(shaped);
+  return textResult(JSON.stringify(cleaned));
 }
 var JSON_PATCH = "application/json-patch+json";
 function fieldsToPatch(fields) {
@@ -31498,7 +31508,7 @@ function configureWorkItemsTools(server, deps) {
         { query },
         { project, query: { $top: cap } }
       );
-      const out = asText(result);
+      const out = asCleanText(result);
       if ((result?.workItems?.length ?? 0) >= cap) {
         out.content.push({
           type: "text",
@@ -31614,7 +31624,7 @@ function configureWorkItemsTools(server, deps) {
         { project },
         JSON_PATCH
       );
-      return asText(created);
+      return asCleanText(created);
     }
   );
   server.registerTool(
@@ -31634,7 +31644,7 @@ function configureWorkItemsTools(server, deps) {
         {},
         JSON_PATCH
       );
-      return asText(updated);
+      return asCleanText(updated);
     }
   );
   server.registerTool(
@@ -31654,7 +31664,7 @@ function configureWorkItemsTools(server, deps) {
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) }
       );
-      return asText(comment);
+      return asCleanText(comment);
     }
   );
   server.registerTool(
@@ -31670,7 +31680,7 @@ function configureWorkItemsTools(server, deps) {
       const result = await client.get("/_apis/wit/workitemtypes", {
         project
       });
-      return asText(result.value ?? []);
+      return asCleanText(result.value ?? []);
     }
   );
 }
@@ -31701,7 +31711,7 @@ function configureRepositoriesTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get("/_apis/git/repositories", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31721,7 +31731,7 @@ function configureRepositoriesTools(server, deps) {
         { project, query: { filter: "heads/" } },
         top
       );
-      return asText(refs);
+      return asCleanText(refs);
     }
   );
   server.registerTool(
@@ -31746,7 +31756,7 @@ function configureRepositoriesTools(server, deps) {
         const size = Buffer.byteLength(content, "utf8");
         if (size > MAX_INLINE_FILE_BYTES) {
           const { content: _omitted, ...metadata } = item;
-          return asText({
+          return asCleanText({
             ...metadata,
             contentOmitted: true,
             size,
@@ -31754,7 +31764,7 @@ function configureRepositoriesTools(server, deps) {
           });
         }
       }
-      return asText(item);
+      return asCleanText(item);
     }
   );
   server.registerTool(
@@ -31783,7 +31793,7 @@ function configureRepositoriesTools(server, deps) {
           }
         }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31815,7 +31825,7 @@ function configureRepositoriesTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits`,
         { project, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31834,7 +31844,7 @@ function configureRepositoriesTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
         { project }
       );
-      return asText(commit);
+      return asCleanText(commit);
     }
   );
 }
@@ -31863,7 +31873,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31882,7 +31892,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
   server.registerTool(
@@ -31902,7 +31912,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31930,7 +31940,7 @@ function configurePullRequestTools(server, deps) {
         },
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
   server.registerTool(
@@ -31951,7 +31961,7 @@ function configurePullRequestTools(server, deps) {
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project }
       );
-      return asText(thread);
+      return asCleanText(thread);
     }
   );
   server.registerTool(
@@ -31984,7 +31994,7 @@ function configurePullRequestTools(server, deps) {
         body,
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
 }
@@ -32024,7 +32034,7 @@ function configurePipelinesTools(server, deps) {
         project,
         query: { $top: cap }
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32041,7 +32051,7 @@ function configurePipelinesTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { pipelineVersion };
       const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asText(pipeline);
+      return asCleanText(pipeline);
     }
   );
   server.registerTool(
@@ -32071,7 +32081,7 @@ function configurePipelinesTools(server, deps) {
         project,
         query
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32086,7 +32096,7 @@ function configurePipelinesTools(server, deps) {
     async ({ project, buildId }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const build = await client.get(`/_apis/build/builds/${buildId}`, { project });
-      return asText(build);
+      return asCleanText(build);
     }
   );
   server.registerTool(
@@ -32106,7 +32116,7 @@ function configurePipelinesTools(server, deps) {
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
       const build = await client.post("/_apis/build/builds", body, { project });
-      return asText(build);
+      return asCleanText(build);
     }
   );
   server.registerTool(
@@ -32128,13 +32138,13 @@ function configurePipelinesTools(server, deps) {
           `/_apis/build/builds/${buildId}/logs`,
           { project }
         );
-        return asText(result.value ?? []);
+        return asCleanText(result.value ?? []);
       }
       const body = await client.get(`/_apis/build/builds/${buildId}/logs/${logId}`, {
         project,
         query: { startLine, endLine }
       });
-      return asText(unwrapBuildLogLines(body));
+      return asCleanText(unwrapBuildLogLines(body));
     }
   );
 }
@@ -32164,7 +32174,7 @@ function configureWorkTools(server, deps) {
         workPath(team, "teamsettings/iterations"),
         { project, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32183,7 +32193,7 @@ function configureWorkTools(server, deps) {
       const result = await client.get(workPath(team, "backlogs"), {
         project
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32202,7 +32212,7 @@ function configureWorkTools(server, deps) {
         workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
         { project }
       );
-      return asText(capacity);
+      return asCleanText(capacity);
     }
   );
 }
@@ -32225,7 +32235,7 @@ function configureWikiTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get("/_apis/wiki/wikis", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32256,13 +32266,13 @@ function configureWikiTools(server, deps) {
       const size = Buffer.byteLength(JSON.stringify(data), "utf8");
       if (size > MAX_INLINE_PAGE_BYTES) {
         const { content: _omitted, ...metadata } = data;
-        return asText({
+        return asCleanText({
           page: { ...metadata, contentOmitted: true, size },
           eTag: etag,
           message: `Page payload (${size} bytes) exceeds the ${MAX_INLINE_PAGE_BYTES}-byte inline limit; content omitted. Re-fetch with includeContent=false and recursionLevel=none for metadata only.`
         });
       }
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     }
   );
   server.registerTool(
@@ -32289,7 +32299,7 @@ function configureWikiTools(server, deps) {
           headers: eTag ? { "If-Match": eTag } : void 0
         }
       );
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     }
   );
 }
@@ -32311,7 +32321,7 @@ function configureTestPlansTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { owner, filterActivePlans };
       const plans = await client.getAll("/_apis/testplan/plans", { project, query }, top);
-      return asText(plans);
+      return asCleanText(plans);
     }
   );
   server.registerTool(
@@ -32333,7 +32343,7 @@ function configureTestPlansTools(server, deps) {
         { project, query },
         top
       );
-      return asText(suites);
+      return asCleanText(suites);
     }
   );
   server.registerTool(
@@ -32354,7 +32364,7 @@ function configureTestPlansTools(server, deps) {
         { project },
         top
       );
-      return asText(cases);
+      return asCleanText(cases);
     }
   );
 }

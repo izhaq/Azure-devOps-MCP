@@ -164,7 +164,12 @@ describe("configureWorkTools", () => {
     expect(calls[0]!.url).toContain(
       "/DefaultCollection/Proj/Team%20A/_apis/work/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
     );
-    expect(result).toEqual(capacity);
+    // teamMember is an ADO identity object; cleanAdo flattens it to the displayName string.
+    expect(result).toEqual({
+      teamMembers: [{ teamMember: "Dev", activities: [{ capacityPerDay: 6 }] }],
+      totalCapacityPerDay: 6,
+      totalDaysOff: 0,
+    });
   });
 
   it("work_get_capacity omits the team segment when no team is given", async () => {

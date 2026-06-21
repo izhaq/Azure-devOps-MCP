@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import type { QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asCleanText } from "./_shared.js";
 
 /**
  * test-plans domain: test plans, their suites, and the test cases in a suite.
@@ -40,7 +40,7 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
       const client = deps.clientFor(patFromExtra(extra));
       const query: Record<string, QueryValue> = { owner, filterActivePlans };
       const plans = await client.getAll("/_apis/testplan/plans", { project, query }, top);
-      return asText(plans);
+      return asCleanText(plans);
     },
   );
 
@@ -74,7 +74,7 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
         { project, query },
         top,
       );
-      return asText(suites);
+      return asCleanText(suites);
     },
   );
 
@@ -102,7 +102,7 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
         { project },
         top,
       );
-      return asText(cases);
+      return asCleanText(cases);
     },
   );
 }

@@ -4,7 +4,7 @@ import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit } from "../azure/client.js";
 import { toPreviewVersion } from "../shared/api-version.js";
 import { buildWorkItemQuery } from "../shared/wiql.js";
-import { asText, asCompactText, asTicketList, truncateField, textResult } from "./_shared.js";
+import { asCleanText, asTicketList, cleanAdo, truncateField, textResult } from "./_shared.js";
 
 /** Compact projection for the task-level list path — excludes the heavy HTML description. */
 const LIST_FIELDS = [
@@ -27,43 +27,22 @@ const MAX_DESCRIPTION_CHARS = 2000;
 const MAX_INLINE_RESULT_BYTES = 50_000;
 
 /**
- * Reduce any field value that looks like an ADO identity object (has a
- * `displayName` property) to just the display name string. This strips the
- * URL, GUID, uniqueName, imageUrl, descriptor, and nested _links that ADO
- * returns for every identity field — none of which are useful to the model.
- */
-function flattenIdentities(fields: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    if (value !== null && typeof value === "object" && "displayName" in value) {
-      result[key] = (value as { displayName: unknown }).displayName;
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
-/**
- * Format a single work item for the detail path: strip identity-object noise
- * and internal _links, truncate the raw HTML description, then emit compact
- * JSON. If the item is still oversized, return a short actionable message
- * rather than blowing the model's context window.
+ * Format a single work item for the detail path: truncate the raw HTML
+ * description, then apply cleanAdo (strips _links everywhere, flattens identity
+ * objects to display names). If still oversized, return an actionable message.
  */
 function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
-  let shaped = item;
+  let shaped: unknown = item;
   if (item && typeof item === "object" && "fields" in item) {
-    const { _links: _ignored, ...rest } = item as Record<string, unknown>;
-    const original = (rest.fields as Record<string, unknown> | undefined) ?? {};
-    let fields = { ...original };
+    const raw = item as Record<string, unknown>;
+    const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
     if (typeof fields["System.Description"] === "string") {
       fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
     }
-    // Flatten identity objects (AssignedTo, CreatedBy, ChangedBy, …) to displayName only.
-    fields = flattenIdentities(fields);
-    shaped = { ...rest, fields };
+    shaped = { ...raw, fields };
   }
-  const bytes = Buffer.byteLength(JSON.stringify(shaped), "utf8");
+  const cleaned = cleanAdo(shaped);
+  const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
   if (bytes > MAX_INLINE_RESULT_BYTES) {
     const id = (item as { id?: number } | null)?.id;
     return textResult(
@@ -72,7 +51,7 @@ function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
         `e.g. ["System.Title","System.State","System.AssignedTo"].`,
     );
   }
-  return asCompactText(shaped);
+  return textResult(JSON.stringify(cleaned));
 }
 
 /**
@@ -133,7 +112,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         { query },
         { project, query: { $top: cap } },
       );
-      const out = asText(result);
+      const out = asCleanText(result);
       // When the result fills the cap, more may have matched: tell the model so
       // it doesn't mistake a capped page for the complete set.
       if ((result?.workItems?.length ?? 0) >= cap) {
@@ -324,7 +303,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         { project },
         JSON_PATCH,
       );
-      return asText(created);
+      return asCleanText(created);
     },
   );
 
@@ -348,7 +327,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         {},
         JSON_PATCH,
       );
-      return asText(updated);
+      return asCleanText(updated);
     },
   );
 
@@ -369,7 +348,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) },
       );
-      return asText(comment);
+      return asCleanText(comment);
     },
   );
 
@@ -386,7 +365,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       const result = await client.get<{ value?: unknown[] }>("/_apis/wit/workitemtypes", {
         project,
       });
-      return asText(result.value ?? []);
+      return asCleanText(result.value ?? []);
     },
   );
 }
