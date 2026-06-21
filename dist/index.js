@@ -31517,15 +31517,22 @@ var LIST_FIELDS = [
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
 var MAX_INLINE_RESULT_BYTES = 5e4;
+var STRIP_WIT_TOP_LEVEL = /* @__PURE__ */ new Set(["rev", "commentVersionRef"]);
 function formatWorkItemDetail(item) {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
     const raw = item;
-    const fields = { ...raw.fields };
-    if (typeof fields["System.Description"] === "string") {
-      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+    const top = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!STRIP_WIT_TOP_LEVEL.has(k)) top[k] = v;
     }
-    shaped = { ...raw, fields };
+    const fields = { ...raw.fields };
+    for (const [key, val] of Object.entries(fields)) {
+      if (typeof val === "string" && val.includes("<") && val.length > MAX_DESCRIPTION_CHARS) {
+        fields[key] = truncateField(val, MAX_DESCRIPTION_CHARS);
+      }
+    }
+    shaped = { ...top, fields };
   }
   const cleaned = cleanAdo(shaped);
   const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");

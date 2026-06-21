@@ -26,20 +26,38 @@ const MAX_DESCRIPTION_CHARS = 2000;
  */
 const MAX_INLINE_RESULT_BYTES = 50_000;
 
+/** Top-level work item fields that are pure ADO internals — never useful to the model. */
+const STRIP_WIT_TOP_LEVEL = new Set(["rev", "commentVersionRef"]);
+
 /**
- * Format a single work item for the detail path: truncate the raw HTML
- * description, then apply cleanAdo (strips _links everywhere, flattens identity
- * objects to display names). If still oversized, return an actionable message.
+ * Format a single work item for the detail path:
+ * - Strip top-level noise fields (rev, commentVersionRef).
+ * - Truncate ALL HTML-containing fields in `fields` (not just System.Description —
+ *   ReproSteps, SystemInfo, History, etc. are equally verbose raw HTML).
+ * - Apply cleanAdo (strips _links, flattens identities).
+ * - Size-guard at 50 KB; return an actionable message if exceeded.
  */
 function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
   let shaped: unknown = item;
   if (item && typeof item === "object" && "fields" in item) {
     const raw = item as Record<string, unknown>;
-    const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
-    if (typeof fields["System.Description"] === "string") {
-      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+
+    // Strip top-level noise, keep everything else
+    const top: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!STRIP_WIT_TOP_LEVEL.has(k)) top[k] = v;
     }
-    shaped = { ...raw, fields };
+
+    // Truncate every field whose value looks like HTML (contains an opening tag).
+    // This catches System.Description, ReproSteps, SystemInfo, History, etc.
+    const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
+    for (const [key, val] of Object.entries(fields)) {
+      if (typeof val === "string" && val.includes("<") && val.length > MAX_DESCRIPTION_CHARS) {
+        fields[key] = truncateField(val, MAX_DESCRIPTION_CHARS);
+      }
+    }
+
+    shaped = { ...top, fields };
   }
   const cleaned = cleanAdo(shaped);
   const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
