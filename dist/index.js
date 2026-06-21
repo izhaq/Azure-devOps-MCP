@@ -31482,14 +31482,23 @@ function configureCoreTools(server, deps) {
     },
     async ({ project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const slimTeam = (t) => {
+        const team = t;
+        return {
+          id: team["id"],
+          name: team["name"],
+          description: team["description"],
+          projectName: team["projectName"]
+        };
+      };
       if (project) {
         const teams2 = await client.getAll(`/_apis/projects/${encodeURIComponent(project)}/teams`);
-        return asCleanText(teams2);
+        return asCleanText(teams2.map(slimTeam));
       }
       const teams = await client.getAll("/_apis/teams", {
         apiVersion: toPreviewVersion(deps.config.apiVersion, 3)
       });
-      return asCleanText(teams);
+      return asCleanText(teams.map(slimTeam));
     }
   );
 }
@@ -31726,7 +31735,7 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
         { project },
         JSON_PATCH
       );
-      return asCleanText(created);
+      return formatWorkItemDetail(created);
     }
   );
   server.registerTool(
@@ -31748,7 +31757,7 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
         {},
         JSON_PATCH
       );
-      return asCleanText(updated);
+      return formatWorkItemDetail(updated);
     }
   );
   server.registerTool(
@@ -31763,12 +31772,17 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
     },
     async ({ project, id, text }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const STRIP_COMMENT_KEYS = /* @__PURE__ */ new Set(["renderedText", "reactions", "mentions", "format"]);
       const comment = await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) }
       );
-      return asCleanText(comment);
+      const slim = {};
+      for (const [k, v] of Object.entries(comment)) {
+        if (!STRIP_COMMENT_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31784,7 +31798,16 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
       const result = await client.get("/_apis/wit/workitemtypes", {
         project
       });
-      return asCleanText(result.value ?? []);
+      const slim = (result.value ?? []).map((t) => {
+        const type = t;
+        return {
+          name: type["name"],
+          referenceName: type["referenceName"],
+          description: type["description"],
+          color: type["color"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
 }
@@ -31845,17 +31868,15 @@ function configureRepositoriesTools(server, deps) {
         { project, query: { filter: "heads/" } },
         top
       );
-      const withShortName = refs.map((ref) => {
-        if (ref && typeof ref === "object" && typeof ref.name === "string") {
-          const name = ref.name;
-          return {
-            ...ref,
-            name: name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name
-          };
-        }
-        return ref;
+      const slim = refs.map((ref) => {
+        const r = ref;
+        const rawName = r["name"] ?? "";
+        return {
+          name: rawName.startsWith("refs/heads/") ? rawName.slice("refs/heads/".length) : rawName,
+          objectId: r["objectId"]
+        };
       });
-      return asCleanText(withShortName);
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31919,14 +31940,18 @@ function configureRepositoriesTools(server, deps) {
       );
       const allItems = result.value ?? [];
       const sliced = allItems.slice(0, cap);
+      const slimmed = sliced.map((item) => {
+        const it = item;
+        return { path: it["path"], gitItemPath: it["gitItemPath"], isFolder: it["isFolder"] };
+      });
       if (allItems.length > cap) {
         return textResult(
-          JSON.stringify(cleanAdo(sliced)) + `
+          JSON.stringify(cleanAdo(slimmed)) + `
 
 [Truncated: showing ${cap} of ${allItems.length} items. Use scopePath to narrow the listing.]`
         );
       }
-      return asCleanText(sliced);
+      return asCleanText(slimmed);
     }
   );
   server.registerTool(
@@ -31958,7 +31983,17 @@ function configureRepositoriesTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits`,
         { project, query }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((c) => {
+        const commit = c;
+        const author2 = commit["author"];
+        return {
+          commitId: commit["commitId"],
+          comment: commit["comment"],
+          author: author2 ? { name: author2["name"], date: author2["date"] } : void 0,
+          changeCounts: commit["changeCounts"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -31978,11 +32013,16 @@ function configureRepositoriesTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = {};
       if (includeChanges) query["changeCount"] = 100;
+      const STRIP_COMMIT_KEYS = /* @__PURE__ */ new Set(["treeId", "committer", "push"]);
       const commit = await client.get(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
         { project, query }
       );
-      return asCleanText(commit);
+      const slim = {};
+      for (const [k, v] of Object.entries(commit)) {
+        if (!STRIP_COMMIT_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     }
   );
 }
@@ -32153,7 +32193,13 @@ function configurePullRequestTools(server, deps) {
         body,
         { project }
       );
-      return asCleanText(pr);
+      return asCleanText({
+        pullRequestId: pr["pullRequestId"],
+        title: pr["title"],
+        status: pr["status"],
+        sourceRefName: pr["sourceRefName"],
+        targetRefName: pr["targetRefName"]
+      });
     }
   );
   server.registerTool(
@@ -32174,7 +32220,11 @@ function configurePullRequestTools(server, deps) {
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project }
       );
-      return asCleanText(thread);
+      return asCleanText({
+        id: thread["id"],
+        status: thread["status"],
+        commentCount: 1
+      });
     }
   );
   server.registerTool(
@@ -32215,7 +32265,13 @@ function configurePullRequestTools(server, deps) {
         body,
         { project }
       );
-      return asCleanText(pr);
+      return asCleanText({
+        pullRequestId: pr["pullRequestId"],
+        title: pr["title"],
+        status: pr["status"],
+        sourceRefName: pr["sourceRefName"],
+        targetRefName: pr["targetRefName"]
+      });
     }
   );
   server.registerTool(
@@ -32287,7 +32343,16 @@ function configurePipelinesTools(server, deps) {
         project,
         query: { $top: cap }
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((p) => {
+        const pipeline = p;
+        return {
+          id: pipeline["id"],
+          name: pipeline["name"],
+          folder: pipeline["folder"],
+          revision: pipeline["revision"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32334,7 +32399,22 @@ function configurePipelinesTools(server, deps) {
         project,
         query
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((b) => {
+        const build = b;
+        const def = build["definition"];
+        return {
+          id: build["id"],
+          buildNumber: build["buildNumber"],
+          status: build["status"],
+          result: build["result"],
+          startTime: build["startTime"],
+          finishTime: build["finishTime"],
+          sourceBranch: build["sourceBranch"],
+          definition: def ? { id: def["id"], name: def["name"] } : void 0,
+          requestedBy: build["requestedBy"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32348,8 +32428,21 @@ function configurePipelinesTools(server, deps) {
     },
     async ({ project, buildId }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const build = await client.get(`/_apis/build/builds/${buildId}`, { project });
-      return asCleanText(build);
+      const build = await client.get(`/_apis/build/builds/${buildId}`, {
+        project
+      });
+      const STRIP_BUILD_KEYS = /* @__PURE__ */ new Set([
+        "orchestrationPlan",
+        "validationResults",
+        "properties",
+        "triggerInfo",
+        "project"
+      ]);
+      const slim = {};
+      for (const [k, v] of Object.entries(build)) {
+        if (!STRIP_BUILD_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32479,7 +32572,19 @@ Path: ${sprint.path ?? ""}`
       const result = await client.get(workPath(team, "backlogs"), {
         project: effectiveProject
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((l) => {
+        const level = l;
+        const types = level["workItemTypes"] ?? [];
+        const defType = level["defaultWorkItemType"];
+        return {
+          id: level["id"],
+          name: level["name"],
+          rank: level["rank"],
+          workItemTypes: types.map((t) => t["name"] ?? String(t)),
+          defaultWorkItemType: defType ? defType["name"] ?? void 0 : void 0
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32514,11 +32619,23 @@ Path: ${sprint.path ?? ""}`
         }
         resolvedId = match.id;
       }
-      const capacity = await client.get(
+      const raw = await client.get(
         workPath(team, `teamsettings/iterations/${encodeURIComponent(resolvedId)}/capacities`),
         { project: effectiveProject }
       );
-      return asCleanText(capacity);
+      let result = raw;
+      if (raw && Array.isArray(raw["teamMembers"])) {
+        result = {
+          ...raw,
+          teamMembers: raw["teamMembers"].map((member) => ({
+            ...member,
+            activities: (member["activities"] ?? []).map(
+              ({ displayAttributes: _d, ...rest }) => rest
+            )
+          }))
+        };
+      }
+      return asCleanText(result);
     }
   );
 }
@@ -32670,7 +32787,18 @@ function configureTestPlansTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { owner, filterActivePlans };
       const plans = await client.getAll("/_apis/testplan/plans", { project, query }, top);
-      return asCleanText(plans);
+      const slim = plans.map((p) => {
+        const plan = p;
+        return {
+          id: plan["id"],
+          name: plan["name"],
+          state: plan["state"],
+          startDate: plan["startDate"],
+          endDate: plan["endDate"],
+          rootSuiteId: plan["rootSuiteId"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32692,7 +32820,17 @@ function configureTestPlansTools(server, deps) {
         { project, query },
         top
       );
-      return asCleanText(suites);
+      const slim = suites.map((s) => {
+        const suite = s;
+        const parent = suite["parentSuite"];
+        return {
+          id: suite["id"],
+          name: suite["name"],
+          suiteType: suite["suiteType"],
+          parentSuite: parent ? { id: parent["id"] } : void 0
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
@@ -32713,7 +32851,21 @@ function configureTestPlansTools(server, deps) {
         { project },
         top
       );
-      return asCleanText(cases);
+      const slim = cases.map((c) => {
+        const tc = c;
+        const wi = tc["workItem"];
+        const points = tc["pointAssignments"] ?? [];
+        return {
+          workItem: wi ? { id: wi["id"], name: wi["name"] } : void 0,
+          order: tc["order"],
+          pointAssignments: points.map((pt) => ({
+            id: pt["id"],
+            tester: pt["tester"],
+            configurationName: pt["configurationName"]
+          }))
+        };
+      });
+      return asCleanText(slim);
     }
   );
 }

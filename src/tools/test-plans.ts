@@ -43,7 +43,18 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
       const client = deps.clientFor(patFromExtra(extra));
       const query: Record<string, QueryValue> = { owner, filterActivePlans };
       const plans = await client.getAll("/_apis/testplan/plans", { project, query }, top);
-      return asCleanText(plans);
+      const slim = plans.map((p) => {
+        const plan = p as Record<string, unknown>;
+        return {
+          id: plan["id"],
+          name: plan["name"],
+          state: plan["state"],
+          startDate: plan["startDate"],
+          endDate: plan["endDate"],
+          rootSuiteId: plan["rootSuiteId"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -79,7 +90,17 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
         { project, query },
         top,
       );
-      return asCleanText(suites);
+      const slim = suites.map((s) => {
+        const suite = s as Record<string, unknown>;
+        const parent = suite["parentSuite"] as Record<string, unknown> | undefined;
+        return {
+          id: suite["id"],
+          name: suite["name"],
+          suiteType: suite["suiteType"],
+          parentSuite: parent ? { id: parent["id"] } : undefined,
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -110,7 +131,21 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
         { project },
         top,
       );
-      return asCleanText(cases);
+      const slim = cases.map((c) => {
+        const tc = c as Record<string, unknown>;
+        const wi = tc["workItem"] as Record<string, unknown> | undefined;
+        const points = (tc["pointAssignments"] as Array<Record<string, unknown>> | undefined) ?? [];
+        return {
+          workItem: wi ? { id: wi["id"], name: wi["name"] } : undefined,
+          order: tc["order"],
+          pointAssignments: points.map((pt) => ({
+            id: pt["id"],
+            tester: pt["tester"],
+            configurationName: pt["configurationName"],
+          })),
+        };
+      });
+      return asCleanText(slim);
     },
   );
 }

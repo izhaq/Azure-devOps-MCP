@@ -189,7 +189,7 @@ describe("configureTestPlansTools (suites + cases)", () => {
       await tools.get("testplan_list_cases")!({ project: "Proj", planId: 5, suiteId: 9 }, {}),
     ) as unknown[];
     expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/testplan/plans/5/suites/9/testcase");
-    expect(cases).toEqual([{ workItem: { id: 42 } }]);
+    expect(cases).toEqual([{ workItem: { id: 42 }, pointAssignments: [] }]);
   });
 
   it("testplan_list_cases follows the continuation token and bounds to top", async () => {

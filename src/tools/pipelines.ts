@@ -76,7 +76,16 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
         project,
         query: { $top: cap },
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((p) => {
+        const pipeline = p as Record<string, unknown>;
+        return {
+          id: pipeline["id"],
+          name: pipeline["name"],
+          folder: pipeline["folder"],
+          revision: pipeline["revision"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -145,7 +154,22 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
         project,
         query,
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((b) => {
+        const build = b as Record<string, unknown>;
+        const def = build["definition"] as Record<string, unknown> | undefined;
+        return {
+          id: build["id"],
+          buildNumber: build["buildNumber"],
+          status: build["status"],
+          result: build["result"],
+          startTime: build["startTime"],
+          finishTime: build["finishTime"],
+          sourceBranch: build["sourceBranch"],
+          definition: def ? { id: def["id"], name: def["name"] } : undefined,
+          requestedBy: build["requestedBy"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -160,8 +184,21 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
     },
     async ({ project, buildId }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const build = await client.get(`/_apis/build/builds/${buildId}`, { project });
-      return asCleanText(build);
+      const build = await client.get<Record<string, unknown>>(`/_apis/build/builds/${buildId}`, {
+        project,
+      });
+      const STRIP_BUILD_KEYS = new Set([
+        "orchestrationPlan",
+        "validationResults",
+        "properties",
+        "triggerInfo",
+        "project",
+      ]);
+      const slim: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(build)) {
+        if (!STRIP_BUILD_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     },
   );
 

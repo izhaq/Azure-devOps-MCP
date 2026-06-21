@@ -126,7 +126,19 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
         project: effectiveProject,
       });
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((l) => {
+        const level = l as Record<string, unknown>;
+        const types = (level["workItemTypes"] as Array<Record<string, unknown>> | undefined) ?? [];
+        const defType = level["defaultWorkItemType"] as Record<string, unknown> | undefined;
+        return {
+          id: level["id"],
+          name: level["name"],
+          rank: level["rank"],
+          workItemTypes: types.map((t) => (t["name"] as string) ?? String(t)),
+          defaultWorkItemType: defType ? ((defType["name"] as string) ?? undefined) : undefined,
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -172,11 +184,24 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
         resolvedId = match.id;
       }
 
-      const capacity = await client.get(
+      const raw = await client.get<Record<string, unknown>>(
         workPath(team, `teamsettings/iterations/${encodeURIComponent(resolvedId)}/capacities`),
         { project: effectiveProject },
       );
-      return asCleanText(capacity);
+      // Strip displayAttributes (UI-only display hints) from each member's activities.
+      let result: unknown = raw;
+      if (raw && Array.isArray(raw["teamMembers"])) {
+        result = {
+          ...raw,
+          teamMembers: (raw["teamMembers"] as Array<Record<string, unknown>>).map((member) => ({
+            ...member,
+            activities: ((member["activities"] as Array<Record<string, unknown>>) ?? []).map(
+              ({ displayAttributes: _d, ...rest }) => rest,
+            ),
+          })),
+        };
+      }
+      return asCleanText(result);
     },
   );
 }
