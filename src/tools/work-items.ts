@@ -27,20 +27,41 @@ const MAX_DESCRIPTION_CHARS = 2000;
 const MAX_INLINE_RESULT_BYTES = 50_000;
 
 /**
- * Format a single work item for the detail path: truncate the raw HTML
- * description (per decision, no HTML→markdown conversion), then emit compact
+ * Reduce any field value that looks like an ADO identity object (has a
+ * `displayName` property) to just the display name string. This strips the
+ * URL, GUID, uniqueName, imageUrl, descriptor, and nested _links that ADO
+ * returns for every identity field — none of which are useful to the model.
+ */
+function flattenIdentities(fields: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== null && typeof value === "object" && "displayName" in value) {
+      result[key] = (value as { displayName: unknown }).displayName;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Format a single work item for the detail path: strip identity-object noise
+ * and internal _links, truncate the raw HTML description, then emit compact
  * JSON. If the item is still oversized, return a short actionable message
  * rather than blowing the model's context window.
  */
 function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
-    const original = (item as { fields?: Record<string, unknown> }).fields ?? {};
-    const fields = { ...original };
+    const { _links: _ignored, ...rest } = item as Record<string, unknown>;
+    const original = (rest.fields as Record<string, unknown> | undefined) ?? {};
+    let fields = { ...original };
     if (typeof fields["System.Description"] === "string") {
       fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
     }
-    shaped = { ...(item as object), fields };
+    // Flatten identity objects (AssignedTo, CreatedBy, ChangedBy, …) to displayName only.
+    fields = flattenIdentities(fields);
+    shaped = { ...rest, fields };
   }
   const bytes = Buffer.byteLength(JSON.stringify(shaped), "utf8");
   if (bytes > MAX_INLINE_RESULT_BYTES) {

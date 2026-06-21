@@ -31439,15 +31439,28 @@ var LIST_FIELDS = [
 ];
 var MAX_DESCRIPTION_CHARS = 2e3;
 var MAX_INLINE_RESULT_BYTES = 5e4;
+function flattenIdentities(fields) {
+  const result = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== null && typeof value === "object" && "displayName" in value) {
+      result[key] = value.displayName;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
 function formatWorkItemDetail(item) {
   let shaped = item;
   if (item && typeof item === "object" && "fields" in item) {
-    const original = item.fields ?? {};
-    const fields = { ...original };
+    const { _links: _ignored, ...rest } = item;
+    const original = rest.fields ?? {};
+    let fields = { ...original };
     if (typeof fields["System.Description"] === "string") {
       fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
     }
-    shaped = { ...item, fields };
+    fields = flattenIdentities(fields);
+    shaped = { ...rest, fields };
   }
   const bytes = Buffer.byteLength(JSON.stringify(shaped), "utf8");
   if (bytes > MAX_INLINE_RESULT_BYTES) {
