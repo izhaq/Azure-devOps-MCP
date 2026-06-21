@@ -417,21 +417,35 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
           .min(1)
           .optional()
           .describe(
-            "Current source branch tip commit id (NOT a merge commit); required by the server to complete a PR",
+            "Current source branch tip commit id; if omitted when completing, it is auto-fetched " +
+              "from the PR — you usually don't need to supply this.",
           ),
         project: z.string().min(1).optional().describe("Project name or ID"),
       },
     },
     async ({ repositoryId, pullRequestId, status, lastMergeSourceCommitId, project }, extra) => {
-      if (status === "completed" && !lastMergeSourceCommitId) {
-        throw new Error(
-          "Completing a pull request requires 'lastMergeSourceCommitId' (the current source branch tip commit id).",
-        );
-      }
       const client = deps.clientFor(patFromExtra(extra));
+
+      // Completing a PR requires the source branch tip commit id, which a weak
+      // model never knows. Auto-fetch it from the PR instead of erroring out.
+      let commitId = lastMergeSourceCommitId;
+      if (status === "completed" && !commitId) {
+        const pr = await client.get<{ lastMergeSourceCommit?: { commitId?: string } }>(
+          `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
+          { project },
+        );
+        commitId = pr?.lastMergeSourceCommit?.commitId;
+        if (!commitId) {
+          throw new Error(
+            `Could not auto-fetch lastMergeSourceCommitId for PR ${pullRequestId}. ` +
+              `The PR may not have a source commit yet (e.g. no commits pushed).`,
+          );
+        }
+      }
+
       const body: Record<string, unknown> = { status };
-      if (lastMergeSourceCommitId) {
-        body["lastMergeSourceCommit"] = { commitId: lastMergeSourceCommitId };
+      if (commitId) {
+        body["lastMergeSourceCommit"] = { commitId };
       }
       const pr = await client.patch(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,

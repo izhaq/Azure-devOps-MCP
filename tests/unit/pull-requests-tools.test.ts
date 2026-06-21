@@ -80,6 +80,32 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
+/** Fetch that returns a different body per (url, method), recording each call. */
+function routedSetup(routes: (url: string, method: string) => unknown) {
+  const calls: Call[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    const method = init?.method ?? "GET";
+    calls.push({
+      url: String(url),
+      method,
+      auth: headers?.["Authorization"] ?? "",
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      contentType: headers?.["Content-Type"] ?? "",
+    });
+    return new Response(JSON.stringify(routes(String(url), method)), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  const { server, tools } = fakeServer();
+  configurePullRequestTools(
+    server,
+    createToolDeps({ config, logger, fetchImpl: impl }),
+  );
+  return { calls, tools };
+}
+
 const TOOLS = ["pr_list", "pr_get", "pr_list_threads", "pr_create", "pr_add_comment", "pr_update_status"];
 
 describe("configurePullRequestTools", () => {
@@ -199,15 +225,34 @@ describe("configurePullRequestTools", () => {
     expect(call.body).toEqual({ status: "abandoned" });
   });
 
-  it("pr_update_status rejects completing without a source commit id (no REST call made)", async () => {
-    const { calls, tools } = setup({ pullRequestId: 5 });
+  it("pr_update_status auto-fetches lastMergeSourceCommit when completing without an id", async () => {
+    const { calls, tools } = routedSetup((url, method) => {
+      // PATCH completes the PR; GET fetches the source commit id.
+      if (method === "PATCH") return { pullRequestId: 5, status: "completed" };
+      return { lastMergeSourceCommit: { commitId: "tip999" } };
+    });
+    await tools.get("pr_update_status")!(
+      { repositoryId: "repo1", pullRequestId: 5, status: "completed" },
+      {},
+    );
+    // First a GET to read the tip commit, then a PATCH carrying it.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[1]!.method).toBe("PATCH");
+    expect(calls[1]!.body).toEqual({
+      status: "completed",
+      lastMergeSourceCommit: { commitId: "tip999" },
+    });
+  });
+
+  it("pr_update_status throws when the PR has no source commit to auto-fetch", async () => {
+    const { tools } = routedSetup((url, method) => (method === "PATCH" ? {} : { pullRequestId: 5 }));
     await expect(
       tools.get("pr_update_status")!(
         { repositoryId: "repo1", pullRequestId: 5, status: "completed" },
         {},
       ),
-    ).rejects.toThrow(/requires 'lastMergeSourceCommitId'/);
-    expect(calls).toHaveLength(0);
+    ).rejects.toThrow(/Could not auto-fetch lastMergeSourceCommitId/);
   });
 
   it("pr_update_status includes lastMergeSourceCommit when completing with a source commit id", async () => {
