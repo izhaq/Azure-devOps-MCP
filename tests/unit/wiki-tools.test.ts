@@ -101,6 +101,13 @@ describe("configureWikiTools (read)", () => {
     expect(wikis).toHaveLength(2);
   });
 
+  it("wiki_list falls back to ADO_DEFAULT_PROJECT when project is omitted", async () => {
+    const cfgWithDefault: ServerConfig = { ...config, defaultProject: "DefaultProj" };
+    const { calls, tools } = setup({ value: [] }, { config: cfgWithDefault });
+    await tools.get("wiki_list")!({}, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/DefaultProj/_apis/wiki/wikis");
+  });
+
   it("wiki_list slims objects to id/name/type only", async () => {
     const { tools } = setup({
       value: [{ id: "w1", name: "project-wiki", type: "projectWiki", repositoryId: "r1", mappedPath: "/", remoteUrl: "https://..." }],
@@ -111,7 +118,7 @@ describe("configureWikiTools (read)", () => {
     expect(wikis[0]).not.toHaveProperty("remoteUrl");
   });
 
-  it("wiki_get_page with recursionLevel returns a compact path tree, not full objects", async () => {
+  it("wiki_get_page with recursionLevel returns top-level sections only by default", async () => {
     const { calls, tools } = setup(
       {
         path: "/",
@@ -127,14 +134,36 @@ describe("configureWikiTools (read)", () => {
       {},
     )) as { content: Array<{ text: string }> };
     const text = result.content[0]!.text;
-    // Should be plain text paths, not JSON objects
+    // Top-level sections are shown
     expect(text).toContain("/Home");
     expect(text).toContain("/Docs");
-    expect(text).toContain("/Docs/Setup");
+    // Sub-sections are hidden by default
+    expect(text).not.toContain("/Docs/Setup");
     expect(text).not.toContain("gitItemPath");
     expect(text).not.toContain("isParentPage");
     // Content should default to false when recursionLevel is set
     expect(calls[0]!.url).toContain("includeContent=false");
+  });
+
+  it("wiki_get_page with showSubSections=true returns the full nested tree", async () => {
+    const { tools } = setup(
+      {
+        path: "/",
+        subPages: [
+          { path: "/Home", subPages: [] },
+          { path: "/Docs", subPages: [{ path: "/Docs/Setup", subPages: [] }] },
+        ],
+      },
+      { etag: '"e"' },
+    );
+    const result = (await tools.get("wiki_get_page")!(
+      { project: "Proj", wikiIdentifier: "MyWiki", path: "/", recursionLevel: "full", showSubSections: true },
+      {},
+    )) as { content: Array<{ text: string }> };
+    const text = result.content[0]!.text;
+    expect(text).toContain("/Home");
+    expect(text).toContain("/Docs");
+    expect(text).toContain("/Docs/Setup");
   });
 
   it("wiki_get_page requests the page with path + includeContent and surfaces the ETag", async () => {

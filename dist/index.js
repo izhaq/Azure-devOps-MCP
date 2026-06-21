@@ -32658,18 +32658,19 @@ function configureWikiTools(server, deps) {
   server.registerTool(
     "wiki_list",
     {
-      description: "List the wikis in a project.",
+      description: "List the wikis in a project. Falls back to ADO_DEFAULT_PROJECT when project is omitted.",
       inputSchema: {
-        project: external_exports.string().min(1).describe("Project name or ID"),
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         top: external_exports.number().int().positive().max(deps.config.maxResults).optional().describe("Maximum number of wikis")
       }
     },
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get(
         "/_apis/wiki/wikis",
-        { project }
+        { project: effectiveProject }
       );
       const slim = (result.value ?? []).slice(0, cap).map((w) => ({
         id: w["id"],
@@ -32682,21 +32683,25 @@ function configureWikiTools(server, deps) {
   server.registerTool(
     "wiki_get_page",
     {
-      description: `Get a wiki page by path, or list its sections. Two modes: (1) Read a page: omit recursionLevel (or set to 'none') \u2014 returns the markdown content and its eTag. (2) List sections/sub-pages: set recursionLevel to 'oneLevel' or 'full' \u2014 returns a compact indented path tree (NOT full objects). Use mode 2 to answer 'what sections does the wiki have?'. The eTag from mode 1 is required by wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted.`,
+      description: `Get a wiki page by path, or list its sections. Falls back to ADO_DEFAULT_PROJECT when project is omitted. Two modes: (1) Read a page: omit recursionLevel (or set to 'none') \u2014 returns the markdown content and its eTag. (2) List sections: set recursionLevel to 'oneLevel' or 'full' \u2014 returns the top-level section names by default (no sub-sections). Set showSubSections=true only when the user explicitly asks to see all nested sub-sections. Use mode 2 to answer 'what sections does the wiki have?'. The eTag from mode 1 is required by wiki_create_or_update_page to edit the page. Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted.`,
       inputSchema: {
-        project: external_exports.string().min(1).describe("Project name or ID"),
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         wikiIdentifier: external_exports.string().min(1).describe("Wiki id or name"),
         path: external_exports.string().min(1).max(MAX_PATH_LENGTH2).describe("Page path, e.g. /Home or /Docs/Setup"),
         includeContent: external_exports.boolean().optional().describe(
           "Include the page's markdown content; defaults to true when reading a single page, false when listing sub-pages (recursionLevel set)"
         ),
         recursionLevel: external_exports.enum(RECURSION2).optional().describe(
-          "Sub-page listing depth: none (default \u2014 read single page), oneLevel, oneLevelPlusNestedEmptyFolders, or full (entire tree). When set, returns a compact path list instead of full objects."
+          "Sub-page listing depth: none (default \u2014 read single page), oneLevel, oneLevelPlusNestedEmptyFolders, or full (entire tree). When set, returns a compact section list instead of full objects."
+        ),
+        showSubSections: external_exports.boolean().optional().describe(
+          "When listing sections (recursionLevel set), include nested sub-sections in the output. Defaults to false \u2014 only top-level sections are shown. Set to true only when the user explicitly asks to see all sub-sections or the full nested tree."
         )
       }
     },
-    async ({ project, wikiIdentifier, path, includeContent, recursionLevel }, extra) => {
+    async ({ project, wikiIdentifier, path, includeContent, recursionLevel, showSubSections }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       const listingTree = recursionLevel && recursionLevel !== "none";
       const query = {
         path,
@@ -32707,13 +32712,26 @@ function configureWikiTools(server, deps) {
         "GET",
         `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
         void 0,
-        { project, query }
+        { project: effectiveProject, query }
       );
       if (listingTree) {
-        const lines = flattenWikiTree(data);
-        return textResult(
-          `Wiki sections at '${path}' (${lines.length} page${lines.length === 1 ? "" : "s"}):
+        if (showSubSections) {
+          const lines = flattenWikiTree(data);
+          return textResult(
+            `Wiki sections at '${path}' (${lines.length} total, including sub-sections):
 ` + lines.join("\n") + (etag ? `
+
+eTag: ${etag}` : "")
+          );
+        }
+        const subPages = data["subPages"] ?? [];
+        const topLevel = subPages.map((p) => p["path"] ?? "?");
+        const hint = topLevel.length > 0 ? `
+
+To read a section, call wiki_get_page with that path. To see sub-sections of a specific section, call wiki_get_page with that path and recursionLevel=oneLevel.` : "";
+        return textResult(
+          `Wiki top-level sections at '${path}' (${topLevel.length}):
+` + topLevel.join("\n") + hint + (etag ? `
 
 eTag: ${etag}` : "")
         );
@@ -32733,9 +32751,9 @@ eTag: ${etag}` : "")
   server.registerTool(
     "wiki_create_or_update_page",
     {
-      description: "Create or edit a wiki page at a path. IMPORTANT: To EDIT an existing page, you must first call wiki_get_page to retrieve its eTag, then pass that eTag here \u2014 Azure DevOps requires it for optimistic concurrency. Without eTag, edits to an existing page are rejected. To CREATE a new page, omit eTag entirely. Returns the saved page and its new eTag (save it if you plan to edit again).",
+      description: "Create or edit a wiki page at a path. Falls back to ADO_DEFAULT_PROJECT when project is omitted. IMPORTANT: To EDIT an existing page, you must first call wiki_get_page to retrieve its eTag, then pass that eTag here \u2014 Azure DevOps requires it for optimistic concurrency. Without eTag, edits to an existing page are rejected. To CREATE a new page, omit eTag entirely. Returns the saved page and its new eTag (save it if you plan to edit again).",
       inputSchema: {
-        project: external_exports.string().min(1).describe("Project name or ID"),
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         wikiIdentifier: external_exports.string().min(1).describe("Wiki id or name"),
         path: external_exports.string().min(1).max(MAX_PATH_LENGTH2).describe("Page path, e.g. /Home or /Docs/Setup"),
         content: external_exports.string().describe("Markdown content for the page"),
@@ -32746,13 +32764,14 @@ eTag: ${etag}` : "")
     },
     async ({ project, wikiIdentifier, path, content, eTag }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       try {
         const { data, etag } = await client.requestWithEtag(
           "PUT",
           `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
           { content },
           {
-            project,
+            project: effectiveProject,
             query: { path },
             headers: eTag ? { "If-Match": eTag } : void 0
           }
