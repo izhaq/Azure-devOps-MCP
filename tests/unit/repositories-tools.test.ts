@@ -108,11 +108,16 @@ describe("configureRepositoriesTools", () => {
     expect(repos).toHaveLength(2);
   });
 
-  it("repo_list_branches lists heads refs", async () => {
-    const { calls, tools } = setup({ value: [{ name: "refs/heads/main" }] });
-    await tools.get("repo_list_branches")!({ repositoryId: "my repo" }, {});
+  it("repo_list_branches lists heads refs and strips the refs/heads/ prefix", async () => {
+    const { calls, tools } = setup({ value: [{ name: "refs/heads/main", objectId: "abc" }] });
+    const branches = parseList(
+      await tools.get("repo_list_branches")!({ repositoryId: "my repo" }, {}),
+    ) as Array<Record<string, unknown>>;
     expect(calls[0]!.url).toContain("/_apis/git/repositories/my%20repo/refs");
     expect(calls[0]!.url).toContain("filter=heads%2F");
+    expect(branches[0]!["name"]).toBe("main");
+    // Other fields are preserved.
+    expect(branches[0]!["objectId"]).toBe("abc");
   });
 
   it("repo_get_file requests item content at a path on a branch", async () => {
@@ -154,6 +159,16 @@ describe("configureRepositoriesTools", () => {
     const { calls, tools } = setup({ commitId: "abc123" });
     await tools.get("repo_get_commit")!({ repositoryId: "repo1", commitId: "abc123" }, {});
     expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/commits/abc123");
+    expect(calls[0]!.url).not.toContain("changeCount");
+  });
+
+  it("repo_get_commit adds changeCount when includeChanges is true", async () => {
+    const { calls, tools } = setup({ commitId: "abc123", changes: [] });
+    await tools.get("repo_get_commit")!(
+      { repositoryId: "repo1", commitId: "abc123", includeChanges: true },
+      {},
+    );
+    expect(calls[0]!.url).toContain("changeCount=100");
   });
 
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {
@@ -194,12 +209,22 @@ describe("configureRepositoriesTools", () => {
       expect(repos).toHaveLength(2);
     });
 
-    it("repo_list_items returns at most maxResults even with recursionLevel full", async () => {
+    it("repo_list_items returns at most maxResults and notes truncation", async () => {
       const { tools } = setup(fivePage, { config: smallConfig });
-      const items = parseList(
-        await tools.get("repo_list_items")!({ repositoryId: "repo1", recursionLevel: "full" }, {}),
-      );
+      const result = (await tools.get("repo_list_items")!(
+        { repositoryId: "repo1", recursionLevel: "full" },
+        {},
+      )) as { content: Array<{ text: string }> };
+      const text = result.content[0]!.text;
+      expect(text).toContain("[Truncated: showing 2 of 5 items.");
+      const items = JSON.parse(text.split("\n\n[Truncated")[0]!) as unknown[];
       expect(items).toHaveLength(2);
+    });
+
+    it("repo_list_items omits the truncation note when under the cap", async () => {
+      const { tools } = setup({ value: [{ path: "/a" }] });
+      const items = parseList(await tools.get("repo_list_items")!({ repositoryId: "repo1" }, {}));
+      expect(items).toHaveLength(1);
     });
 
     it("repo_list_commits returns at most maxResults when top is omitted", async () => {

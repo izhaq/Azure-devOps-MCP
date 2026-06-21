@@ -100,12 +100,24 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
     },
     async ({ repositoryId, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const refs = await client.getAll(
+      const refs = await client.getAll<Record<string, unknown>>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/refs`,
         { project, query: { filter: "heads/" } },
         top,
       );
-      return asCleanText(refs);
+      // ADO returns names like "refs/heads/main"; strip the prefix so a weak
+      // model sees the plain branch name it expects ("main").
+      const withShortName = refs.map((ref) => {
+        if (ref && typeof ref === "object" && typeof ref.name === "string") {
+          const name = ref.name;
+          return {
+            ...ref,
+            name: name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name,
+          };
+        }
+        return ref;
+      });
+      return asCleanText(withShortName);
     },
   );
 
@@ -188,7 +200,17 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
           },
         },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const allItems = result.value ?? [];
+      const sliced = allItems.slice(0, cap);
+      // When a recursive listing is sliced, tell the model it's partial so it
+      // doesn't treat a capped page as the whole tree.
+      if (allItems.length > cap) {
+        return textResult(
+          JSON.stringify(cleanAdo(sliced)) +
+            `\n\n[Truncated: showing ${cap} of ${allItems.length} items. Use scopePath to narrow the listing.]`,
+        );
+      }
+      return asCleanText(sliced);
     },
   );
 
@@ -244,13 +266,21 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         repositoryId: z.string().min(1).describe("Repository id or name"),
         commitId: z.string().min(1).describe("Commit SHA"),
         project: z.string().min(1).optional().describe("Project name or ID"),
+        includeChanges: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include the list of changed files in the response (adds a 'changes' array to the commit)",
+          ),
       },
     },
-    async ({ repositoryId, commitId, project }, extra) => {
+    async ({ repositoryId, commitId, project, includeChanges }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const query: Record<string, QueryValue> = {};
+      if (includeChanges) query["changeCount"] = 100;
       const commit = await client.get(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
-        { project },
+        { project, query },
       );
       return asCleanText(commit);
     },
