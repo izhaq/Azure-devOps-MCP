@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText } from "./_shared.js";
+import { asCleanText, textResult } from "./_shared.js";
 
 /**
  * work domain: team boards/iterations (sprints), backlog levels, capacity.
@@ -26,6 +26,44 @@ function workPath(team: string | undefined, resource: string): string {
 
 export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
+    "work_get_current_sprint",
+    {
+      description:
+        "Get the current sprint (iteration) for a project. Returns the sprint name and dates. " +
+        "Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. " +
+        "Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      inputSchema: {
+        project: z.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
+        team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
+      },
+    },
+    async ({ project, team }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const result = await client.get<{ value?: Array<{
+        name?: string;
+        path?: string;
+        attributes?: { startDate?: string; finishDate?: string; timeFrame?: string };
+      }> }>(
+        workPath(team, "teamsettings/iterations"),
+        { project: effectiveProject, query: { $timeframe: "current" } },
+      );
+      const sprint = (result.value ?? [])[0];
+      if (!sprint) {
+        return textResult(
+          "No current sprint found." +
+          (effectiveProject ? ` Project: ${effectiveProject}.` : " Try specifying a project."),
+        );
+      }
+      const start = sprint.attributes?.startDate?.slice(0, 10) ?? "unknown";
+      const end   = sprint.attributes?.finishDate?.slice(0, 10) ?? "unknown";
+      return textResult(
+        `Current sprint: ${sprint.name}\nPeriod: ${start} to ${end}\nPath: ${sprint.path ?? ""}`,
+      );
+    },
+  );
+
+  server.registerTool(
     "work_list_iterations",
     {
       description: "List a team's iterations (sprints), optionally only the current one.",
@@ -48,12 +86,13 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     async ({ project, team, timeframe, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const query: Record<string, QueryValue> = { $timeframe: timeframe };
       const result = await client.get<{ value?: unknown[] }>(
         workPath(team, "teamsettings/iterations"),
-        { project, query },
+        { project: effectiveProject, query },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -78,10 +117,11 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
     async ({ project, team, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const result = await client.get<{ value?: unknown[] }>(workPath(team, "backlogs"), {
-        project,
+        project: effectiveProject,
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -101,7 +141,7 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
         workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
         { project },
       );
-      return asText(capacity);
+      return asCleanText(capacity);
     },
   );
 }

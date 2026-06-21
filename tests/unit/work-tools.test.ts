@@ -26,6 +26,7 @@ const config: ServerConfig = {
   httpPort: 3000,
   pageSize: 50,
   maxResults: 200,
+  agentListCap: 25,
   timeoutMs: 30000,
   logLevel: "error",
 };
@@ -77,7 +78,7 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
-const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity"];
+const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity", "work_get_current_sprint"];
 
 describe("configureWorkTools", () => {
   it("registers all work tools", () => {
@@ -163,7 +164,12 @@ describe("configureWorkTools", () => {
     expect(calls[0]!.url).toContain(
       "/DefaultCollection/Proj/Team%20A/_apis/work/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
     );
-    expect(result).toEqual(capacity);
+    // teamMember is an ADO identity object; cleanAdo flattens it to the displayName string.
+    expect(result).toEqual({
+      teamMembers: [{ teamMember: "Dev", activities: [{ capacityPerDay: 6 }] }],
+      totalCapacityPerDay: 6,
+      totalDaysOff: 0,
+    });
   });
 
   it("work_get_capacity omits the team segment when no team is given", async () => {

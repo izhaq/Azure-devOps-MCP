@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asText, toRefName } from "./_shared.js";
+import { asCleanText, toRefName } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -70,7 +70,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
       // maxResults) cap getAll applies, so list tools stay consistent.
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get<{ value?: unknown[] }>("/_apis/git/repositories", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -97,7 +97,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         { project, query: { filter: "heads/" } },
         top,
       );
-      return asText(refs);
+      return asCleanText(refs);
     },
   );
 
@@ -130,7 +130,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         const size = Buffer.byteLength(content, "utf8");
         if (size > MAX_INLINE_FILE_BYTES) {
           const { content: _omitted, ...metadata } = item;
-          return asText({
+          return asCleanText({
             ...metadata,
             contentOmitted: true,
             size,
@@ -138,7 +138,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
           });
         }
       }
-      return asText(item);
+      return asCleanText(item);
     },
   );
 
@@ -180,7 +180,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
           },
         },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -224,7 +224,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits`,
         { project, query },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -244,7 +244,7 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
         { project },
       );
-      return asText(commit);
+      return asCleanText(commit);
     },
   );
 }
@@ -298,7 +298,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -318,7 +318,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project },
       );
-      return asText(pr);
+      return asCleanText(pr);
     },
   );
 
@@ -342,7 +342,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project },
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     },
   );
 
@@ -371,7 +371,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         },
         { project },
       );
-      return asText(pr);
+      return asCleanText(pr);
     },
   );
 
@@ -393,7 +393,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project },
       );
-      return asText(thread);
+      return asCleanText(thread);
     },
   );
 
@@ -438,7 +438,7 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
         body,
         { project },
       );
-      return asText(pr);
+      return asCleanText(pr);
     },
   );
 }

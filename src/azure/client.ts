@@ -149,6 +149,66 @@ export class AzureDevOpsClient {
     return items;
   }
 
+  /**
+   * Fetch a projection of many work items in one call via
+   * `POST /_apis/wit/workitemsbatch`. `fields` is an explicit allow-list and
+   * deliberately excludes `System.Description` so list output stays compact;
+   * `fields` and `$expand=relations` are mutually exclusive server-side, and a
+   * thin list never needs relations. Ids beyond ADO's 200-per-batch limit are
+   * chunked transparently and the results concatenated in order.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch
+   */
+  async workItemsBatch<T>(ids: number[], fields: string[]): Promise<T[]> {
+    const out: T[] = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      if (chunk.length === 0) continue;
+      const body = await this.post<{ value?: T[] }>("/_apis/wit/workitemsbatch", {
+        ids: chunk,
+        fields,
+      });
+      out.push(...(body?.value ?? []));
+    }
+    return out;
+  }
+
+  /**
+   * Best-effort resolution of a display name to the server's canonical identity
+   * display name, so a caller can match `System.AssignedTo` using the server's
+   * own spelling rather than whatever (possibly bilingual) string the model
+   * typed. Returns `undefined` on no match or any error — callers fall back to
+   * matching the raw input, so identity resolution never breaks the tool.
+   *
+   * NOTE (on-prem — verify live): the identity search route/version varies by
+   * Azure DevOps Server build; this uses the classic Identities read endpoint.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/ims/identities/read-identities
+   */
+  async resolveIdentity(name: string): Promise<string | undefined> {
+    try {
+      const result = await this.get<{ value?: Array<Record<string, unknown>> }>(
+        "/_apis/identities",
+        { query: { searchFilter: "General", filterValue: name } },
+      );
+      const candidates = result?.value ?? [];
+      if (candidates.length === 0) return undefined;
+      const displayOf = (c: Record<string, unknown>): string | undefined =>
+        (c["providerDisplayName"] ?? c["displayName"]) as string | undefined;
+      // A "General" search is fuzzy and can return several identities. Prefer
+      // one that case-insensitively matches the input on a stable field, so an
+      // ambiguous name doesn't silently resolve to an arbitrary person; fall
+      // back to the first result only when nothing matches exactly.
+      const needle = name.trim().toLowerCase();
+      const exact = candidates.find((c) =>
+        [displayOf(c), c["displayName"], c["mailAddress"], c["mail"], c["uniqueName"]]
+          .some((v) => typeof v === "string" && v.toLowerCase() === needle),
+      );
+      const display = displayOf(exact ?? candidates[0]!);
+      return display && display.length > 0 ? display : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async request<T>(
     method: string,
     path: string,

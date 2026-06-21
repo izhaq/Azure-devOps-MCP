@@ -21429,6 +21429,7 @@ var schema = external_exports.object({
   ADO_TLS_KEY: external_exports.string().optional(),
   ADO_PAGE_SIZE: port("ADO_PAGE_SIZE").default(50),
   ADO_MAX_RESULTS: port("ADO_MAX_RESULTS").default(200),
+  ADO_AGENT_LIST_CAP: port("ADO_AGENT_LIST_CAP").default(25),
   ADO_TIMEOUT_MS: port("ADO_TIMEOUT_MS").default(3e4),
   ADO_LOG_LEVEL: external_exports.enum(["debug", "info", "warn", "error"], { message: "invalid log level" }).default("info")
 });
@@ -21453,6 +21454,7 @@ function loadConfig(env = process.env) {
     tlsKey: v.ADO_TLS_KEY,
     pageSize: v.ADO_PAGE_SIZE,
     maxResults: v.ADO_MAX_RESULTS,
+    agentListCap: v.ADO_AGENT_LIST_CAP,
     timeoutMs: v.ADO_TIMEOUT_MS,
     logLevel: v.ADO_LOG_LEVEL
   };
@@ -21600,6 +21602,58 @@ var AzureDevOpsClient = class {
       if (page.length === 0 || continuationToken === previousToken) break;
     } while (continuationToken);
     return items;
+  }
+  /**
+   * Fetch a projection of many work items in one call via
+   * `POST /_apis/wit/workitemsbatch`. `fields` is an explicit allow-list and
+   * deliberately excludes `System.Description` so list output stays compact;
+   * `fields` and `$expand=relations` are mutually exclusive server-side, and a
+   * thin list never needs relations. Ids beyond ADO's 200-per-batch limit are
+   * chunked transparently and the results concatenated in order.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch
+   */
+  async workItemsBatch(ids, fields) {
+    const out = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      if (chunk.length === 0) continue;
+      const body = await this.post("/_apis/wit/workitemsbatch", {
+        ids: chunk,
+        fields
+      });
+      out.push(...body?.value ?? []);
+    }
+    return out;
+  }
+  /**
+   * Best-effort resolution of a display name to the server's canonical identity
+   * display name, so a caller can match `System.AssignedTo` using the server's
+   * own spelling rather than whatever (possibly bilingual) string the model
+   * typed. Returns `undefined` on no match or any error — callers fall back to
+   * matching the raw input, so identity resolution never breaks the tool.
+   *
+   * NOTE (on-prem — verify live): the identity search route/version varies by
+   * Azure DevOps Server build; this uses the classic Identities read endpoint.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/ims/identities/read-identities
+   */
+  async resolveIdentity(name) {
+    try {
+      const result = await this.get(
+        "/_apis/identities",
+        { query: { searchFilter: "General", filterValue: name } }
+      );
+      const candidates = result?.value ?? [];
+      if (candidates.length === 0) return void 0;
+      const displayOf = (c) => c["providerDisplayName"] ?? c["displayName"];
+      const needle = name.trim().toLowerCase();
+      const exact = candidates.find(
+        (c) => [displayOf(c), c["displayName"], c["mailAddress"], c["mail"], c["uniqueName"]].some((v) => typeof v === "string" && v.toLowerCase() === needle)
+      );
+      const display = displayOf(exact ?? candidates[0]);
+      return display && display.length > 0 ? display : void 0;
+    } catch {
+      return void 0;
+    }
   }
   async request(method, path, body, options, contentType) {
     const { body: parsed } = await this.requestRaw(method, path, body, options, contentType);
@@ -31271,8 +31325,66 @@ function toPreviewVersion(version2, revision) {
 function toRefName(branch) {
   return branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
 }
-function asText(data) {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+var VOTE_LABELS = /* @__PURE__ */ new Map([
+  [10, "approved"],
+  [5, "approved with suggestions"],
+  [-5, "waiting for author"],
+  [-10, "rejected"]
+]);
+function cleanAdo(value) {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(cleanAdo);
+  const obj = value;
+  if ("displayName" in obj) {
+    const name = String(obj.displayName ?? "");
+    if ("vote" in obj && typeof obj.vote === "number" && obj.vote !== 0) {
+      const label = VOTE_LABELS.get(obj.vote) ?? String(obj.vote);
+      return `${name} (${label})`;
+    }
+    return name;
+  }
+  const result = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "_links") continue;
+    if (key === "url" && typeof val === "string") continue;
+    result[key] = cleanAdo(val);
+  }
+  return result;
+}
+function asCleanText(data) {
+  return textResult(JSON.stringify(cleanAdo(data)));
+}
+function textResult(text) {
+  return { content: [{ type: "text", text }] };
+}
+function truncateField(value, max) {
+  if (typeof value !== "string" || value.length <= max) return value;
+  const dropped = value.length - max;
+  return `${value.slice(0, max)} \u2026[truncated ${dropped} chars]`;
+}
+function identityName(value) {
+  if (!value) return "Unassigned";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    const v = value;
+    return v.displayName ?? v.uniqueName ?? "Unassigned";
+  }
+  return String(value);
+}
+function asTicketList(items, meta3) {
+  const shown = items.length;
+  const total = meta3?.total ?? shown;
+  const header = total > shown ? `Showing ${shown} of ${total} work items \u2014 refine your filter or raise "top" to see more.` : `Showing ${shown} work item${shown === 1 ? "" : "s"}.`;
+  const lines = items.map((item) => {
+    const f = item.fields ?? {};
+    const id = item.id ?? f["System.Id"] ?? "?";
+    const type = f["System.WorkItemType"] ?? "WorkItem";
+    const title = f["System.Title"] ?? "(no title)";
+    const state = f["System.State"] ?? "?";
+    const assignee = identityName(f["System.AssignedTo"]);
+    return `#${id} [${type}] ${title} \u2014 ${state} \xB7 ${assignee}`;
+  });
+  return textResult([header, ...lines].join("\n"));
 }
 
 // src/tools/core.ts
@@ -31288,7 +31400,7 @@ function configureCoreTools(server, deps) {
     async ({ top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const projects = await client.getAll("/_apis/projects", {}, top);
-      return asText(projects);
+      return asCleanText(projects);
     }
   );
   server.registerTool(
@@ -31303,17 +31415,80 @@ function configureCoreTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       if (project) {
         const teams2 = await client.getAll(`/_apis/projects/${encodeURIComponent(project)}/teams`);
-        return asText(teams2);
+        return asCleanText(teams2);
       }
       const teams = await client.getAll("/_apis/teams", {
         apiVersion: toPreviewVersion(deps.config.apiVersion, 3)
       });
-      return asText(teams);
+      return asCleanText(teams);
     }
   );
 }
 
+// src/shared/wiql.ts
+var DEFAULT_CLOSED_STATES = ["Closed", "Done", "Removed", "Resolved", "Completed"];
+function quote(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function buildWorkItemQuery(options = {}) {
+  const conditions = [];
+  if (options.mine) {
+    conditions.push("[System.AssignedTo] = @Me");
+  } else if (options.assignedTo) {
+    const op = options.assignedTo.match === "equals" ? "=" : "CONTAINS";
+    conditions.push(`[System.AssignedTo] ${op} ${quote(options.assignedTo.value)}`);
+  }
+  if (!options.allStates) {
+    if (options.states && options.states.length > 0) {
+      conditions.push(`[System.State] IN (${options.states.map(quote).join(", ")})`);
+    } else {
+      conditions.push(`[System.State] NOT IN (${DEFAULT_CLOSED_STATES.map(quote).join(", ")})`);
+    }
+  }
+  if (options.titleContains) {
+    conditions.push(`[System.Title] CONTAINS ${quote(options.titleContains)}`);
+  }
+  if (options.iteration) {
+    if (options.iteration === "current") {
+      conditions.push("[System.IterationPath] = @currentIteration");
+    } else {
+      conditions.push(`[System.IterationPath] = ${quote(options.iteration)}`);
+    }
+  }
+  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  return `SELECT [System.Id] FROM WorkItems${where} ORDER BY [System.ChangedDate] DESC`;
+}
+
 // src/tools/work-items.ts
+var LIST_FIELDS = [
+  "System.Id",
+  "System.Title",
+  "System.State",
+  "System.AssignedTo",
+  "System.WorkItemType"
+];
+var MAX_DESCRIPTION_CHARS = 2e3;
+var MAX_INLINE_RESULT_BYTES = 5e4;
+function formatWorkItemDetail(item) {
+  let shaped = item;
+  if (item && typeof item === "object" && "fields" in item) {
+    const raw = item;
+    const fields = { ...raw.fields };
+    if (typeof fields["System.Description"] === "string") {
+      fields["System.Description"] = truncateField(fields["System.Description"], MAX_DESCRIPTION_CHARS);
+    }
+    shaped = { ...raw, fields };
+  }
+  const cleaned = cleanAdo(shaped);
+  const bytes = Buffer.byteLength(JSON.stringify(cleaned), "utf8");
+  if (bytes > MAX_INLINE_RESULT_BYTES) {
+    const id = item?.id;
+    return textResult(
+      `Work item ${id ?? "?"} is too large to return inline (${bytes} bytes). Re-fetch only the fields you need via wit_get's "fields" argument, e.g. ["System.Title","System.State","System.AssignedTo"].`
+    );
+  }
+  return textResult(JSON.stringify(cleaned));
+}
 var JSON_PATCH = "application/json-patch+json";
 function fieldsToPatch(fields) {
   return Object.entries(fields).map(([name, value]) => ({
@@ -31335,12 +31510,91 @@ function configureWorkItemsTools(server, deps) {
     },
     async ({ query, project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.post(
         "/_apis/wit/wiql",
         { query },
-        { project, query: top ? { $top: top } : void 0 }
+        { project, query: { $top: cap } }
       );
-      return asText(result);
+      const out = asCleanText(result);
+      if ((result?.workItems?.length ?? 0) >= cap) {
+        out.content.push({
+          type: "text",
+          text: `Note: results are capped at ${cap} (top / ADO_MAX_RESULTS) and may be truncated. Add a tighter WHERE clause or adjust "top" to see more.`
+        });
+      }
+      return out;
+    }
+  );
+  server.registerTool(
+    "wit_list_my_work_items",
+    {
+      description: "List work items assigned to you (default) or to a named teammate, as a compact one-line-per-ticket summary. Composes the query, identity matching, and field projection server-side so you never write WIQL or fetch items one-by-one. Defaults to open items; pass state='all' or an explicit state set to change that.",
+      inputSchema: {
+        mine: external_exports.boolean().optional().describe("Only your own items (default true unless assignedTo is given)"),
+        assignedTo: external_exports.string().min(1).optional().describe("Assignee display name to match (resolved server-side; substring match)"),
+        state: external_exports.string().min(1).optional().describe("State filter: 'open' (default), 'all', or a comma-separated set e.g. 'Active,New'"),
+        titleContains: external_exports.string().min(1).optional().describe("Substring to match in the title"),
+        iteration: external_exports.string().min(1).optional().describe(
+          "Sprint/iteration filter: 'current' for the active sprint, or an exact iteration path e.g. 'MyProject\\\\Sprint 48'"
+        ),
+        project: external_exports.string().min(1).optional().describe(
+          "Project to scope to; falls back to ADO_DEFAULT_PROJECT if set, otherwise collection-wide"
+        ),
+        top: external_exports.number().int().positive().optional().describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)")
+      }
+    },
+    async ({ mine, assignedTo, state, titleContains, iteration, project, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const useMine = mine ?? !assignedTo;
+      let assignedToOpt;
+      if (!useMine && assignedTo) {
+        const canonical = await client.resolveIdentity(assignedTo);
+        assignedToOpt = canonical ? { value: canonical, match: "equals" } : { value: assignedTo, match: "contains" };
+      }
+      let states;
+      let allStates = false;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      const wiql = buildWorkItemQuery({
+        mine: useMine,
+        assignedTo: assignedToOpt,
+        states,
+        allStates,
+        titleContains,
+        iteration
+      });
+      const result = await client.post(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project: effectiveProject }
+      );
+      const refs = (result?.workItems ?? []).filter(
+        (r) => typeof r.id === "number"
+      );
+      const total = refs.length;
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+      const items = await client.workItemsBatch(
+        ids,
+        LIST_FIELDS
+      );
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids.map((id) => byId.get(id)).filter((it) => it !== void 0);
+      const listed = asTicketList(ordered, { total });
+      const listText = listed.content[0]?.text ?? "";
+      if (Buffer.byteLength(listText, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        return textResult(
+          `Result set is too large to return inline (${items.length} items). Narrow your filter (state, assignedTo, titleContains) or lower "top".`
+        );
+      }
+      return listed;
     }
   );
   server.registerTool(
@@ -31364,7 +31618,7 @@ function configureWorkItemsTools(server, deps) {
           $expand: expand
         }
       });
-      return asText(item);
+      return formatWorkItemDetail(item);
     }
   );
   server.registerTool(
@@ -31385,7 +31639,7 @@ function configureWorkItemsTools(server, deps) {
         { project },
         JSON_PATCH
       );
-      return asText(created);
+      return asCleanText(created);
     }
   );
   server.registerTool(
@@ -31405,7 +31659,7 @@ function configureWorkItemsTools(server, deps) {
         {},
         JSON_PATCH
       );
-      return asText(updated);
+      return asCleanText(updated);
     }
   );
   server.registerTool(
@@ -31425,7 +31679,7 @@ function configureWorkItemsTools(server, deps) {
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) }
       );
-      return asText(comment);
+      return asCleanText(comment);
     }
   );
   server.registerTool(
@@ -31441,7 +31695,7 @@ function configureWorkItemsTools(server, deps) {
       const result = await client.get("/_apis/wit/workitemtypes", {
         project
       });
-      return asText(result.value ?? []);
+      return asCleanText(result.value ?? []);
     }
   );
 }
@@ -31472,7 +31726,7 @@ function configureRepositoriesTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get("/_apis/git/repositories", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31492,7 +31746,7 @@ function configureRepositoriesTools(server, deps) {
         { project, query: { filter: "heads/" } },
         top
       );
-      return asText(refs);
+      return asCleanText(refs);
     }
   );
   server.registerTool(
@@ -31517,7 +31771,7 @@ function configureRepositoriesTools(server, deps) {
         const size = Buffer.byteLength(content, "utf8");
         if (size > MAX_INLINE_FILE_BYTES) {
           const { content: _omitted, ...metadata } = item;
-          return asText({
+          return asCleanText({
             ...metadata,
             contentOmitted: true,
             size,
@@ -31525,7 +31779,7 @@ function configureRepositoriesTools(server, deps) {
           });
         }
       }
-      return asText(item);
+      return asCleanText(item);
     }
   );
   server.registerTool(
@@ -31554,7 +31808,7 @@ function configureRepositoriesTools(server, deps) {
           }
         }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31586,7 +31840,7 @@ function configureRepositoriesTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits`,
         { project, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31605,7 +31859,7 @@ function configureRepositoriesTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
         { project }
       );
-      return asText(commit);
+      return asCleanText(commit);
     }
   );
 }
@@ -31634,7 +31888,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         { project, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31653,7 +31907,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
   server.registerTool(
@@ -31673,7 +31927,7 @@ function configurePullRequestTools(server, deps) {
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { project }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31701,7 +31955,7 @@ function configurePullRequestTools(server, deps) {
         },
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
   server.registerTool(
@@ -31722,7 +31976,7 @@ function configurePullRequestTools(server, deps) {
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project }
       );
-      return asText(thread);
+      return asCleanText(thread);
     }
   );
   server.registerTool(
@@ -31755,7 +32009,7 @@ function configurePullRequestTools(server, deps) {
         body,
         { project }
       );
-      return asText(pr);
+      return asCleanText(pr);
     }
   );
 }
@@ -31795,7 +32049,7 @@ function configurePipelinesTools(server, deps) {
         project,
         query: { $top: cap }
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31812,7 +32066,7 @@ function configurePipelinesTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { pipelineVersion };
       const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asText(pipeline);
+      return asCleanText(pipeline);
     }
   );
   server.registerTool(
@@ -31842,7 +32096,7 @@ function configurePipelinesTools(server, deps) {
         project,
         query
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31857,7 +32111,7 @@ function configurePipelinesTools(server, deps) {
     async ({ project, buildId }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const build = await client.get(`/_apis/build/builds/${buildId}`, { project });
-      return asText(build);
+      return asCleanText(build);
     }
   );
   server.registerTool(
@@ -31877,7 +32131,7 @@ function configurePipelinesTools(server, deps) {
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
       const build = await client.post("/_apis/build/builds", body, { project });
-      return asText(build);
+      return asCleanText(build);
     }
   );
   server.registerTool(
@@ -31899,13 +32153,13 @@ function configurePipelinesTools(server, deps) {
           `/_apis/build/builds/${buildId}/logs`,
           { project }
         );
-        return asText(result.value ?? []);
+        return asCleanText(result.value ?? []);
       }
       const body = await client.get(`/_apis/build/builds/${buildId}/logs/${logId}`, {
         project,
         query: { startLine, endLine }
       });
-      return asText(unwrapBuildLogLines(body));
+      return asCleanText(unwrapBuildLogLines(body));
     }
   );
 }
@@ -31916,6 +32170,37 @@ function workPath(team, resource) {
   return `${teamSegment}/_apis/work/${resource}`;
 }
 function configureWorkTools(server, deps) {
+  server.registerTool(
+    "work_get_current_sprint",
+    {
+      description: "Get the current sprint (iteration) for a project. Returns the sprint name and dates. Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      inputSchema: {
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
+        team: external_exports.string().min(1).optional().describe("Team name or ID; defaults to the project's default team")
+      }
+    },
+    async ({ project, team }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const result = await client.get(
+        workPath(team, "teamsettings/iterations"),
+        { project: effectiveProject, query: { $timeframe: "current" } }
+      );
+      const sprint = (result.value ?? [])[0];
+      if (!sprint) {
+        return textResult(
+          "No current sprint found." + (effectiveProject ? ` Project: ${effectiveProject}.` : " Try specifying a project.")
+        );
+      }
+      const start = sprint.attributes?.startDate?.slice(0, 10) ?? "unknown";
+      const end = sprint.attributes?.finishDate?.slice(0, 10) ?? "unknown";
+      return textResult(
+        `Current sprint: ${sprint.name}
+Period: ${start} to ${end}
+Path: ${sprint.path ?? ""}`
+      );
+    }
+  );
   server.registerTool(
     "work_list_iterations",
     {
@@ -31930,12 +32215,13 @@ function configureWorkTools(server, deps) {
     async ({ project, team, timeframe, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const query = { $timeframe: timeframe };
       const result = await client.get(
         workPath(team, "teamsettings/iterations"),
-        { project, query }
+        { project: effectiveProject, query }
       );
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31951,10 +32237,11 @@ function configureWorkTools(server, deps) {
     async ({ project, team, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
       const result = await client.get(workPath(team, "backlogs"), {
-        project
+        project: effectiveProject
       });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -31973,7 +32260,7 @@ function configureWorkTools(server, deps) {
         workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
         { project }
       );
-      return asText(capacity);
+      return asCleanText(capacity);
     }
   );
 }
@@ -31996,7 +32283,7 @@ function configureWikiTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get("/_apis/wiki/wikis", { project });
-      return asText((result.value ?? []).slice(0, cap));
+      return asCleanText((result.value ?? []).slice(0, cap));
     }
   );
   server.registerTool(
@@ -32027,13 +32314,13 @@ function configureWikiTools(server, deps) {
       const size = Buffer.byteLength(JSON.stringify(data), "utf8");
       if (size > MAX_INLINE_PAGE_BYTES) {
         const { content: _omitted, ...metadata } = data;
-        return asText({
+        return asCleanText({
           page: { ...metadata, contentOmitted: true, size },
           eTag: etag,
           message: `Page payload (${size} bytes) exceeds the ${MAX_INLINE_PAGE_BYTES}-byte inline limit; content omitted. Re-fetch with includeContent=false and recursionLevel=none for metadata only.`
         });
       }
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     }
   );
   server.registerTool(
@@ -32060,7 +32347,7 @@ function configureWikiTools(server, deps) {
           headers: eTag ? { "If-Match": eTag } : void 0
         }
       );
-      return asText({ page: data, eTag: etag });
+      return asCleanText({ page: data, eTag: etag });
     }
   );
 }
@@ -32082,7 +32369,7 @@ function configureTestPlansTools(server, deps) {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { owner, filterActivePlans };
       const plans = await client.getAll("/_apis/testplan/plans", { project, query }, top);
-      return asText(plans);
+      return asCleanText(plans);
     }
   );
   server.registerTool(
@@ -32104,7 +32391,7 @@ function configureTestPlansTools(server, deps) {
         { project, query },
         top
       );
-      return asText(suites);
+      return asCleanText(suites);
     }
   );
   server.registerTool(
@@ -32125,7 +32412,7 @@ function configureTestPlansTools(server, deps) {
         { project },
         top
       );
-      return asText(cases);
+      return asCleanText(cases);
     }
   );
 }
