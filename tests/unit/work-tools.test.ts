@@ -78,7 +78,7 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
-const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity"];
+const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity", "work_get_current_sprint"];
 
 describe("configureWorkTools", () => {
   it("registers all work tools", () => {

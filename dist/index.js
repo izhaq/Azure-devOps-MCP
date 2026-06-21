@@ -31346,6 +31346,7 @@ function cleanAdo(value) {
   const result = {};
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
+    if (key === "url" && typeof val === "string") continue;
     result[key] = cleanAdo(val);
   }
   return result;
@@ -32169,6 +32170,37 @@ function workPath(team, resource) {
   return `${teamSegment}/_apis/work/${resource}`;
 }
 function configureWorkTools(server, deps) {
+  server.registerTool(
+    "work_get_current_sprint",
+    {
+      description: "Get the current sprint (iteration) for a project. Returns the sprint name and dates. Use this to answer questions like 'what sprint are we in?' or 'what is the current sprint?'. Falls back to ADO_DEFAULT_PROJECT when no project is given.",
+      inputSchema: {
+        project: external_exports.string().min(1).optional().describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
+        team: external_exports.string().min(1).optional().describe("Team name or ID; defaults to the project's default team")
+      }
+    },
+    async ({ project, team }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+      const result = await client.get(
+        workPath(team, "teamsettings/iterations"),
+        { project: effectiveProject, query: { $timeframe: "current" } }
+      );
+      const sprint = (result.value ?? [])[0];
+      if (!sprint) {
+        return textResult(
+          "No current sprint found." + (effectiveProject ? ` Project: ${effectiveProject}.` : " Try specifying a project.")
+        );
+      }
+      const start = sprint.attributes?.startDate?.slice(0, 10) ?? "unknown";
+      const end = sprint.attributes?.finishDate?.slice(0, 10) ?? "unknown";
+      return textResult(
+        `Current sprint: ${sprint.name}
+Period: ${start} to ${end}
+Path: ${sprint.path ?? ""}`
+      );
+    }
+  );
   server.registerTool(
     "work_list_iterations",
     {

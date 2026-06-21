@@ -44,10 +44,13 @@ export function cleanAdo(value: unknown): unknown {
     return name;
   }
 
-  // Non-identity object: strip `_links`, recurse into remaining fields.
+  // Non-identity object: strip `_links` and bare `url` string fields
+  // (ADO uses `url` for internal REST API self-links — never useful to the model;
+  // user-facing URLs appear as `webUrl`, `remoteUrl`, `sshUrl`, etc.).
   const result: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(obj)) {
     if (key === "_links") continue;
+    if (key === "url" && typeof val === "string") continue;
     result[key] = cleanAdo(val);
   }
   return result;
