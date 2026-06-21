@@ -94,6 +94,37 @@ describe("configureCoreTools", () => {
     expect(calls[0]!.url).not.toContain("preview");
   });
 
+  it("core_list_projects slims each project to id/name/description/state", async () => {
+    const richFetch = (async (url: string | URL | Request) => {
+      void url;
+      return new Response(
+        JSON.stringify({
+          value: [
+            {
+              id: "p1",
+              name: "P1",
+              description: "desc",
+              state: "wellFormed",
+              capabilities: { processTemplate: {} },
+              visibility: "private",
+              lastUpdateTime: "2020-01-01",
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const { server, tools } = fakeServer();
+    configureCoreTools(server, createToolDeps({ config, logger, fetchImpl: richFetch }));
+    const result = (await tools.get("core_list_projects")!({}, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const projects = JSON.parse(result.content[0]!.text) as Array<Record<string, unknown>>;
+    expect(projects[0]).toEqual({ id: "p1", name: "P1", description: "desc", state: "wellFormed" });
+    expect(projects[0]).not.toHaveProperty("capabilities");
+    expect(projects[0]).not.toHaveProperty("visibility");
+  });
+
   it("core_list_projects honors the top argument by limiting returned items", async () => {
     const manyFetch = (async (url: string | URL | Request) => {
       void url;
