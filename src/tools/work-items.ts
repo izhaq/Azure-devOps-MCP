@@ -332,7 +332,14 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         fields: z
           .record(z.string(), z.unknown())
           .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
-          .describe('Field map keyed by reference name, e.g. {"System.Title": "..."}'),
+          .describe(
+            "Field map keyed by ADO field reference names. Common fields: " +
+              '"System.Title" (required), "System.Description", "System.AssignedTo" (display name), ' +
+              '"System.AreaPath", "System.IterationPath", "System.Tags", ' +
+              '"Microsoft.VSTS.Common.Priority" (1-4), "Microsoft.VSTS.Common.Severity", ' +
+              '"Microsoft.VSTS.TCM.ReproSteps" (for Bugs), "System.State". ' +
+              'Example: {"System.Title": "Fix login bug", "System.AssignedTo": "Alice Smith"}',
+          ),
       },
     },
     async ({ project, type, fields }, extra) => {
@@ -356,7 +363,14 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         fields: z
           .record(z.string(), z.unknown())
           .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
-          .describe('Field map keyed by reference name, e.g. {"System.State": "Active"}'),
+          .describe(
+            "Field map keyed by ADO field reference names. Common fields: " +
+              '"System.State" (e.g. "Active", "Resolved", "Closed"), "System.AssignedTo" (display name), ' +
+              '"System.Title", "System.Description", "System.Tags", "System.AreaPath", ' +
+              '"System.IterationPath", "Microsoft.VSTS.Common.Priority" (1-4), ' +
+              '"Microsoft.VSTS.Common.ResolvedReason", "System.Reason". ' +
+              'Example: {"System.State": "Active", "System.AssignedTo": "Bob Jones"}',
+          ),
       },
     },
     async ({ id, fields }, extra) => {
