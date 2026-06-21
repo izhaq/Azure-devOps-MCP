@@ -199,9 +199,11 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
     "build_get_logs",
     {
       description:
-        "Get build logs. Without logId, returns the list of log files (metadata) for " +
-        "the build so you can pick one. With logId, returns that log's content as lines " +
-        "(optionally a startLine..endLine range).",
+        "Get build logs. Two-step workflow: " +
+        "(1) Call WITHOUT logId to get the list of log files for the build — each has an id and a name like 'Initialize job' or 'Run tests'. " +
+        "(2) Call WITH the logId you want to read its full content as lines. " +
+        "Use startLine/endLine to page through large logs. " +
+        "Tip: look for the step where the build failed (non-zero exit code) and fetch that log.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         buildId: z.number().int().positive().describe("Build id"),
