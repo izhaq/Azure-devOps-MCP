@@ -19,7 +19,10 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
   server.registerTool(
     "testplan_list",
     {
-      description: "List the test plans in a project.",
+      description:
+        "List test plans in a project. Returns plan ids and names. " +
+        "To list the suites inside a plan, pass the plan id to testplan_list_suites. " +
+        "Step 1 of 3: testplan_list → testplan_list_suites → testplan_list_cases.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         owner: z.string().min(1).optional().describe("Filter to plans owned by this user (name or ID)"),
@@ -48,8 +51,10 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
     "testplan_list_suites",
     {
       description:
-        "List the test suites in a test plan. Pass asTreeView=true to get the suite hierarchy " +
-        "(parent/child) instead of a flat list.",
+        "List test suites in a test plan. Returns suite ids and names. " +
+        "To list test cases inside a suite, pass the suite id to testplan_list_cases. " +
+        "Step 2 of 3: testplan_list → testplan_list_suites → testplan_list_cases. " +
+        "Pass asTreeView=true to see the parent/child hierarchy.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         planId: z.number().int().positive().describe("Test plan id"),
@@ -81,7 +86,10 @@ export function configureTestPlansTools(server: McpServer, deps: ToolDeps): void
   server.registerTool(
     "testplan_list_cases",
     {
-      description: "List the test cases in a test suite of a plan.",
+      description:
+        "List test cases in a test suite of a plan. " +
+        "Requires both planId (from testplan_list) and suiteId (from testplan_list_suites). " +
+        "Step 3 of 3: testplan_list → testplan_list_suites → testplan_list_cases.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         planId: z.number().int().positive().describe("Test plan id"),
