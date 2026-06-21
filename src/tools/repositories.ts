@@ -117,19 +117,17 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         { project, query: { filter: "heads/" } },
         top,
       );
-      // ADO returns names like "refs/heads/main"; strip the prefix so a weak
-      // model sees the plain branch name it expects ("main").
-      const withShortName = refs.map((ref) => {
-        if (ref && typeof ref === "object" && typeof ref.name === "string") {
-          const name = ref.name;
-          return {
-            ...ref,
-            name: name.startsWith("refs/heads/") ? name.slice("refs/heads/".length) : name,
-          };
-        }
-        return ref;
+      // Slimmed to name and objectId only; ADO returns the refs/heads/ prefix
+      // which we strip so a weak model sees the plain branch name ("main").
+      const slim = refs.map((ref) => {
+        const r = ref as Record<string, unknown>;
+        const rawName = (r["name"] as string) ?? "";
+        return {
+          name: rawName.startsWith("refs/heads/") ? rawName.slice("refs/heads/".length) : rawName,
+          objectId: r["objectId"],
+        };
       });
-      return asCleanText(withShortName);
+      return asCleanText(slim);
     },
   );
 
@@ -214,15 +212,20 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
       );
       const allItems = result.value ?? [];
       const sliced = allItems.slice(0, cap);
+      // Slim each entry to the path + folder flag a model needs to navigate.
+      const slimmed = sliced.map((item) => {
+        const it = item as Record<string, unknown>;
+        return { path: it["path"], gitItemPath: it["gitItemPath"], isFolder: it["isFolder"] };
+      });
       // When a recursive listing is sliced, tell the model it's partial so it
       // doesn't treat a capped page as the whole tree.
       if (allItems.length > cap) {
         return textResult(
-          JSON.stringify(cleanAdo(sliced)) +
+          JSON.stringify(cleanAdo(slimmed)) +
             `\n\n[Truncated: showing ${cap} of ${allItems.length} items. Use scopePath to narrow the listing.]`,
         );
       }
-      return asCleanText(sliced);
+      return asCleanText(slimmed);
     },
   );
 
@@ -266,7 +269,17 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits`,
         { project, query },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((c) => {
+        const commit = c as Record<string, unknown>;
+        const author = commit["author"] as Record<string, unknown> | undefined;
+        return {
+          commitId: commit["commitId"],
+          comment: commit["comment"],
+          author: author ? { name: author["name"], date: author["date"] } : undefined,
+          changeCounts: commit["changeCounts"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 
@@ -290,11 +303,16 @@ export function configureRepositoriesTools(server: McpServer, deps: ToolDeps): v
       const client = deps.clientFor(patFromExtra(extra));
       const query: Record<string, QueryValue> = {};
       if (includeChanges) query["changeCount"] = 100;
-      const commit = await client.get(
+      const STRIP_COMMIT_KEYS = new Set(["treeId", "committer", "push"]);
+      const commit = await client.get<Record<string, unknown>>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/commits/${encodeURIComponent(commitId)}`,
         { project, query },
       );
-      return asCleanText(commit);
+      const slim: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(commit)) {
+        if (!STRIP_COMMIT_KEYS.has(k)) slim[k] = v;
+      }
+      return asCleanText(slim);
     },
   );
 }
@@ -511,12 +529,18 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
       };
       if (resolvedReviewers.length > 0) body["reviewers"] = resolvedReviewers;
 
-      const pr = await client.post(
+      const pr = (await client.post(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests`,
         body,
         { project },
-      );
-      return asCleanText(pr);
+      )) as Record<string, unknown>;
+      return asCleanText({
+        pullRequestId: pr["pullRequestId"],
+        title: pr["title"],
+        status: pr["status"],
+        sourceRefName: pr["sourceRefName"],
+        targetRefName: pr["targetRefName"],
+      });
     },
   );
 
@@ -533,12 +557,16 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     },
     async ({ repositoryId, pullRequestId, content, project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const thread = await client.post(
+      const thread = (await client.post(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}/threads`,
         { comments: [{ parentCommentId: 0, content, commentType: "text" }] },
         { project },
-      );
-      return asCleanText(thread);
+      )) as Record<string, unknown>;
+      return asCleanText({
+        id: thread["id"],
+        status: thread["status"],
+        commentCount: 1,
+      });
     },
   );
 
@@ -592,12 +620,18 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
       if (commitId) {
         body["lastMergeSourceCommit"] = { commitId };
       }
-      const pr = await client.patch(
+      const pr = (await client.patch(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         body,
         { project },
-      );
-      return asCleanText(pr);
+      )) as Record<string, unknown>;
+      return asCleanText({
+        pullRequestId: pr["pullRequestId"],
+        title: pr["title"],
+        status: pr["status"],
+        sourceRefName: pr["sourceRefName"],
+        targetRefName: pr["targetRefName"],
+      });
     },
   );
 
