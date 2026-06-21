@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asCleanText, cleanAdo, textResult, toRefName } from "./_shared.js";
+import { asCleanText, cleanAdo, textResult, toRefName, truncateField } from "./_shared.js";
 
 /**
  * repositories domain: Git read operations.
@@ -352,11 +352,38 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
     },
     async ({ repositoryId, pullRequestId, project }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const pr = await client.get(
+      const pr = await client.get<Record<string, unknown>>(
         `/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullrequests/${pullRequestId}`,
         { project },
       );
-      return asCleanText(pr);
+      // Truncate a long description to keep the payload manageable for small
+      // models, mirroring wit_get's handling of System.Description.
+      if (pr && typeof pr === "object" && typeof pr["description"] === "string") {
+        pr["description"] = truncateField(pr["description"] as string, 2000);
+      }
+      const cleaned = cleanAdo(pr);
+      const payload = JSON.stringify(cleaned);
+      if (Buffer.byteLength(payload, "utf8") > MAX_INLINE_RESULT_BYTES) {
+        // Still too large (e.g. hundreds of reviewers): return key fields only.
+        const safe: Record<string, unknown> = {};
+        for (const key of [
+          "pullRequestId",
+          "title",
+          "status",
+          "createdBy",
+          "creationDate",
+          "sourceRefName",
+          "targetRefName",
+          "mergeStatus",
+          "isDraft",
+          "reviewers",
+        ]) {
+          if (pr && key in pr) safe[key] = cleanAdo(pr[key]);
+        }
+        safe["__truncated"] = true;
+        return textResult(JSON.stringify(safe));
+      }
+      return textResult(payload);
     },
   );
 

@@ -144,6 +144,35 @@ describe("configurePullRequestTools", () => {
     expect(calls[0]!.url).toContain("/_apis/git/repositories/repo1/pullrequests/42");
   });
 
+  it("pr_get truncates a very long description", async () => {
+    const longDesc = "d".repeat(5000);
+    const { tools } = setup({ pullRequestId: 42, description: longDesc });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as { description: string };
+    expect(pr.description).toContain("truncated");
+    expect(pr.description.length).toBeLessThan(longDesc.length);
+  });
+
+  it("pr_get returns key fields only when the payload exceeds the inline budget", async () => {
+    const reviewers = Array.from({ length: 1000 }, (_, i) => ({
+      displayName: `Reviewer ${"x".repeat(80)} ${i}`,
+      vote: 0,
+    }));
+    const { tools } = setup({
+      pullRequestId: 42,
+      title: "Big PR",
+      status: "active",
+      reviewers,
+    });
+    const pr = parseResult(
+      await tools.get("pr_get")!({ repositoryId: "repo1", pullRequestId: 42 }, {}),
+    ) as Record<string, unknown>;
+    expect(pr["__truncated"]).toBe(true);
+    expect(pr["pullRequestId"]).toBe(42);
+    expect(pr["title"]).toBe("Big PR");
+  });
+
   it("pr_list_threads lists threads for a pull request", async () => {
     const { calls, tools } = setup({ value: [{ id: 7 }] });
     await tools.get("pr_list_threads")!({ repositoryId: "repo1", pullRequestId: 42 }, {});
