@@ -214,6 +214,19 @@ describe("configureWikiTools (write)", () => {
     ).rejects.toThrow(/Azure DevOps API error 412/);
   });
 
+  it("returns an actionable hint when a 412 occurs without an eTag (create over existing)", async () => {
+    const { tools } = setup(
+      { message: "VS402567: The version of the page does not match" },
+      { status: 412 },
+    );
+    const res = (await tools.get("wiki_create_or_update_page")!(
+      { project: "Proj", wikiIdentifier: "MyWiki", path: "/Home", content: "x" },
+      {},
+    )) as { content: Array<{ text: string }> };
+    expect(res.content[0]!.text).toContain("already exists");
+    expect(res.content[0]!.text).toContain("wiki_get_page");
+  });
+
   it("surfaces a conflict when creating over an existing page", async () => {
     const { tools } = setup(
       { message: "VS402097: The page already exists" },

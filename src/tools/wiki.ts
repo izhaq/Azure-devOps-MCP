@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type ToolDeps, patFromExtra } from "../context.js";
 import { boundLimit, type QueryValue } from "../azure/client.js";
-import { asCleanText } from "./_shared.js";
+import { asCleanText, textResult } from "./_shared.js";
+import { AdoApiError } from "../azure/errors.js";
 
 /**
  * wiki domain: project wikis + pages.
@@ -109,10 +110,12 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     "wiki_create_or_update_page",
     {
       description:
-        "Create or edit a wiki page at a path. Omit `eTag` to create a new page; " +
-        "to edit an existing page, pass the `eTag` returned by wiki_get_page " +
-        "(Azure DevOps requires it to confirm you are editing the current revision). " +
-        "Returns the saved page and its new `eTag`.",
+        "Create or edit a wiki page at a path. " +
+        "IMPORTANT: To EDIT an existing page, you must first call wiki_get_page to retrieve its eTag, " +
+        "then pass that eTag here — Azure DevOps requires it for optimistic concurrency. " +
+        "Without eTag, edits to an existing page are rejected. " +
+        "To CREATE a new page, omit eTag entirely. " +
+        "Returns the saved page and its new eTag (save it if you plan to edit again).",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
@@ -122,22 +125,36 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
           .string()
           .min(1)
           .optional()
-          .describe("Current page version (the `eTag` from wiki_get_page); required to edit, omit to create"),
+          .describe(
+            "Version token from wiki_get_page — REQUIRED to edit an existing page, omit when creating a new one",
+          ),
       },
     },
     async ({ project, wikiIdentifier, path, content, eTag }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const { data, etag } = await client.requestWithEtag<Record<string, unknown>>(
-        "PUT",
-        `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
-        { content },
-        {
-          project,
-          query: { path },
-          headers: eTag ? { "If-Match": eTag } : undefined,
-        },
-      );
-      return asCleanText({ page: data, eTag: etag });
+      try {
+        const { data, etag } = await client.requestWithEtag<Record<string, unknown>>(
+          "PUT",
+          `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
+          { content },
+          {
+            project,
+            query: { path },
+            headers: eTag ? { "If-Match": eTag } : undefined,
+          },
+        );
+        return asCleanText({ page: data, eTag: etag });
+      } catch (err) {
+        // No eTag + a 412 means the page already exists and ADO wants the
+        // current version. Turn the opaque error into an actionable hint.
+        if (!eTag && err instanceof AdoApiError && err.status === 412) {
+          return textResult(
+            `Page '${path}' already exists. Call wiki_get_page to get its eTag, then retry ` +
+              `wiki_create_or_update_page with that eTag set.`,
+          );
+        }
+        throw err;
+      }
     },
   );
 }
