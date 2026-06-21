@@ -78,6 +78,27 @@ function parseResult(result: unknown): unknown {
   return JSON.parse(text) as unknown;
 }
 
+/** Fetch that returns a different body per endpoint, recording each call. */
+function routedSetup(routes: (url: string) => unknown) {
+  const calls: Call[] = [];
+  const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+    const headers = init?.headers as Record<string, string> | undefined;
+    calls.push({
+      url: String(url),
+      method: init?.method ?? "GET",
+      auth: headers?.["Authorization"] ?? "",
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    });
+    return new Response(JSON.stringify(routes(String(url))), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  const { server, tools } = fakeServer();
+  configureWorkTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+  return { calls, tools };
+}
+
 const TOOLS = ["work_list_iterations", "work_list_backlog_levels", "work_get_capacity", "work_get_current_sprint"];
 
 describe("configureWorkTools", () => {
@@ -181,6 +202,43 @@ describe("configureWorkTools", () => {
     expect(calls[0]!.url).toContain(
       "/DefaultCollection/Proj/_apis/work/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
     );
+  });
+
+  it("work_get_capacity passes a GUID straight through (single REST call)", async () => {
+    const { calls, tools } = routedSetup((url) =>
+      url.includes("/capacities") ? { teamMembers: [], totalCapacityPerDay: 0, totalDaysOff: 0 } : {},
+    );
+    await tools.get("work_get_capacity")!(
+      { project: "Proj", iterationId: "f8b1a0de-1234-4abc-9def-0123456789ab" },
+      {},
+    );
+    // No iteration-list lookup when a GUID is supplied.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toContain("/capacities");
+  });
+
+  it("work_get_capacity resolves an iteration name to its GUID, then fetches capacity", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/capacities"))
+        return { teamMembers: [], totalCapacityPerDay: 0, totalDaysOff: 0 };
+      // teamsettings/iterations list
+      return { value: [{ id: "f8b1a0de-1234-4abc-9def-0123456789ab", name: "Sprint 48" }] };
+    });
+    await tools.get("work_get_capacity")!({ project: "Proj", iterationId: "Sprint 48" }, {});
+    // First call lists iterations; second uses the resolved GUID.
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.url).toContain("/_apis/work/teamsettings/iterations");
+    expect(calls[0]!.url).not.toContain("/capacities");
+    expect(calls[1]!.url).toContain(
+      "/teamsettings/iterations/f8b1a0de-1234-4abc-9def-0123456789ab/capacities",
+    );
+  });
+
+  it("work_get_capacity throws a helpful error when the iteration name is unknown", async () => {
+    const { tools } = routedSetup(() => ({ value: [{ id: "abc", name: "Sprint 1" }] }));
+    await expect(
+      tools.get("work_get_capacity")!({ project: "Proj", iterationId: "Sprint 99" }, {}),
+    ).rejects.toThrow(/No iteration named 'Sprint 99' found/);
   });
 
   it("uses the per-request PAT from the x-ado-pat header when present", async () => {

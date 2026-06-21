@@ -131,15 +131,45 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
       description: "Get a team's capacity (per-member capacity and days off) for an iteration.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
-        iterationId: z.string().uuid().describe("Iteration id (GUID)"),
+        iterationId: z
+          .string()
+          .min(1)
+          .describe(
+            "Iteration GUID or iteration name (e.g. 'Sprint 48'); a name is resolved to its " +
+              "GUID automatically via the team's iteration list.",
+          ),
         team: z.string().min(1).optional().describe("Team name or ID; defaults to the project's default team"),
       },
     },
     async ({ project, iterationId, team }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
+
+      // A weak model almost never knows the iteration GUID; it knows the sprint
+      // name. Resolve a name to its GUID by listing the team's iterations and
+      // matching case-insensitively. GUID input passes straight through.
+      const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let resolvedId = iterationId;
+      if (!GUID_RE.test(iterationId)) {
+        const iters = await client.get<{ value?: Array<{ id?: string; name?: string }> }>(
+          workPath(team, "teamsettings/iterations"),
+          { project: effectiveProject },
+        );
+        const match = (iters.value ?? []).find(
+          (it) => it.name?.toLowerCase() === iterationId.toLowerCase(),
+        );
+        if (!match?.id) {
+          throw new Error(
+            `No iteration named '${iterationId}' found in project '${effectiveProject ?? "(unknown)"}'. ` +
+              `Use work_list_iterations to see available iterations and their ids.`,
+          );
+        }
+        resolvedId = match.id;
+      }
+
       const capacity = await client.get(
-        workPath(team, `teamsettings/iterations/${encodeURIComponent(iterationId)}/capacities`),
-        { project },
+        workPath(team, `teamsettings/iterations/${encodeURIComponent(resolvedId)}/capacities`),
+        { project: effectiveProject },
       );
       return asCleanText(capacity);
     },
