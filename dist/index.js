@@ -31455,7 +31455,7 @@ function configureCoreTools(server, deps) {
   server.registerTool(
     "core_list_projects",
     {
-      description: "List all team projects in the Azure DevOps collection.",
+      description: "List all team projects in the Azure DevOps collection. Returns {id, name, description, state}. Use the 'name' as the 'project' parameter in all other tools (wit_*, pr_*, repo_*, pipeline_*, wiki_*, work_*).",
       inputSchema: {
         top: external_exports.number().int().positive().optional().describe("Maximum number of projects to return")
       }
@@ -31475,7 +31475,7 @@ function configureCoreTools(server, deps) {
   server.registerTool(
     "core_list_teams",
     {
-      description: "List teams for a project, or all teams in the collection if no project is given.",
+      description: "List teams for a project, or all teams in the collection if no project is given. Returns {id, name, description, projectName}. Use the 'name' as the 'team' parameter in work_list_iterations, work_list_backlog_levels, and work_get_capacity.",
       inputSchema: {
         project: external_exports.string().optional().describe("Project name or ID; omit to list all teams")
       }
@@ -31694,7 +31694,7 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
   server.registerTool(
     "wit_get",
     {
-      description: "Get a single work item by id.",
+      description: "Get a single work item by id. Pass 'fields' for a specific field projection OR 'expand' for related data \u2014 they are mutually exclusive (ADO rejects both together).",
       inputSchema: {
         id: external_exports.number().int().positive().describe("Work item id"),
         fields: external_exports.array(external_exports.string()).optional().describe("Specific fields to return (reference names), e.g. System.Title"),
@@ -31807,6 +31807,52 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
         };
       });
       return asCleanText(slim);
+    }
+  );
+  server.registerTool(
+    "wit_search",
+    {
+      description: "Search work items by title text. Returns a compact ticket list (same format as wit_list_my_work_items). Use this when looking for tickets about a topic without filtering by assignee. Falls back to ADO_DEFAULT_PROJECT when project is omitted.",
+      inputSchema: {
+        text: external_exports.string().min(1).describe("Text to match in work item titles"),
+        project: external_exports.string().min(1).optional().describe("Project to scope search; uses ADO_DEFAULT_PROJECT if not given"),
+        state: external_exports.string().min(1).optional().describe(
+          "State filter: 'open' (default, excludes Closed/Done/Resolved), 'all', or a comma-separated list e.g. 'Active,New'"
+        ),
+        top: external_exports.number().int().positive().optional().describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)")
+      }
+    },
+    async ({ text, project, state, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
+      let allStates = false;
+      let states;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      const wiql = buildWorkItemQuery({ mine: false, titleContains: text, allStates, states });
+      const result = await client.post(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project: effectiveProject }
+      );
+      const refs = (result?.workItems ?? []).filter(
+        (r) => typeof r?.id === "number"
+      );
+      const total = refs.length;
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+      const items = await client.workItemsBatch(
+        ids,
+        LIST_FIELDS
+      );
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids.map((id) => byId.get(id)).filter((it) => it !== void 0);
+      return asTicketList(ordered, { total });
     }
   );
 }
@@ -32029,21 +32075,23 @@ function configurePullRequestTools(server, deps) {
   server.registerTool(
     "pr_list",
     {
-      description: "List pull requests in a repository, optionally filtered by status or target branch.",
+      description: "List pull requests in a repository, optionally filtered by status, target branch, or source branch.",
       inputSchema: {
         repositoryId: external_exports.string().min(1).describe("Repository id or name"),
         project: external_exports.string().min(1).optional().describe("Project name or ID"),
         status: external_exports.enum(PR_STATUS).optional().describe("Filter by status: active (default), abandoned, completed, or all"),
         targetBranch: external_exports.string().min(1).optional().describe("Filter by target branch (short name or full ref)"),
+        sourceBranch: external_exports.string().min(1).optional().describe("Filter by source (feature) branch (short name or full ref)"),
         top: external_exports.number().int().positive().max(deps.config.maxResults).optional().describe("Maximum number of pull requests")
       }
     },
-    async ({ repositoryId, project, status, targetBranch, top }, extra) => {
+    async ({ repositoryId, project, status, targetBranch, sourceBranch, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const query = {
         "searchCriteria.status": status,
         "searchCriteria.targetRefName": targetBranch ? toRefName(targetBranch) : void 0,
+        "searchCriteria.sourceRefName": sourceBranch ? toRefName(sourceBranch) : void 0,
         $top: cap
       };
       const result = await client.get(

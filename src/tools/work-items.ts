@@ -309,7 +309,10 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
   server.registerTool(
     "wit_get",
     {
-      description: "Get a single work item by id.",
+      description:
+        "Get a single work item by id. " +
+        "Pass 'fields' for a specific field projection OR 'expand' for related data — " +
+        "they are mutually exclusive (ADO rejects both together).",
       inputSchema: {
         id: z.number().int().positive().describe("Work item id"),
         fields: z
