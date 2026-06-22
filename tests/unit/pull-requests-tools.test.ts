@@ -135,6 +135,15 @@ describe("configurePullRequestTools", () => {
     expect(url).toContain("searchCriteria.targetRefName=refs%2Fheads%2Fmain");
   });
 
+  it("pr_list filters by sourceBranch", async () => {
+    const { calls, tools } = setup({ value: [] });
+    await tools.get("pr_list")!(
+      { repositoryId: "my-repo", project: "Proj", sourceBranch: "feature/x" },
+      {},
+    );
+    expect(calls[0]!.url).toContain("sourceRefName=refs%2Fheads%2Ffeature%2Fx");
+  });
+
   it("pr_list bounds results to maxResults and returns compact text lines", async () => {
     const smallConfig: ServerConfig = { ...config, maxResults: 2 };
     const { calls, tools } = setup(

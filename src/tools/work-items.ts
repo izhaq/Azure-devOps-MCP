@@ -456,4 +456,76 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       return asCleanText(slim);
     },
   );
+
+  server.registerTool(
+    "wit_search",
+    {
+      description:
+        "Search work items by title text. Returns a compact ticket list (same format as " +
+        "wit_list_my_work_items). Use this when looking for tickets about a topic without " +
+        "filtering by assignee. Falls back to ADO_DEFAULT_PROJECT when project is omitted.",
+      inputSchema: {
+        text: z.string().min(1).describe("Text to match in work item titles"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project to scope search; uses ADO_DEFAULT_PROJECT if not given"),
+        state: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "State filter: 'open' (default, excludes Closed/Done/Resolved), 'all', " +
+              "or a comma-separated list e.g. 'Active,New'",
+          ),
+        top: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)"),
+      },
+    },
+    async ({ text, project, state, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
+
+      let allStates = false;
+      let states: string[] | undefined;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+      }
+
+      const wiql = buildWorkItemQuery({ mine: false, titleContains: text, allStates, states });
+      const result = await client.post<{ workItems?: Array<{ id?: number }> }>(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project: effectiveProject },
+      );
+      const refs = (result?.workItems ?? []).filter(
+        (r): r is { id: number } => typeof r?.id === "number",
+      );
+      const total = refs.length;
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+
+      const items = await client.workItemsBatch<{ id?: number; fields?: Record<string, unknown> }>(
+        ids,
+        LIST_FIELDS,
+      );
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids
+        .map((id) => byId.get(id))
+        .filter((it): it is NonNullable<typeof it> => it !== undefined);
+      return asTicketList(ordered, { total });
+    },
+  );
 }
