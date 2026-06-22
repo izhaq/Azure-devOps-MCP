@@ -108,6 +108,13 @@ describe("configureWikiTools (read)", () => {
     expect(calls[0]!.url).toContain("/DefaultCollection/DefaultProj/_apis/wiki/wikis");
   });
 
+  it("wiki_get_page falls back to ADO_DEFAULT_PROJECT when project is omitted", async () => {
+    const cfgWithDefault: ServerConfig = { ...config, defaultProject: "DefaultProj" };
+    const { calls, tools } = setup({ path: "/Home", content: "x" }, { config: cfgWithDefault, etag: '"e"' });
+    await tools.get("wiki_get_page")!({ wikiIdentifier: "MyWiki", path: "/Home" }, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/DefaultProj/_apis/wiki/wikis/");
+  });
+
   it("wiki_list slims objects to id/name/type only", async () => {
     const { tools } = setup({
       value: [{ id: "w1", name: "project-wiki", type: "projectWiki", repositoryId: "r1", mappedPath: "/", remoteUrl: "https://..." }],
@@ -235,6 +242,16 @@ describe("configureWikiTools (read)", () => {
 });
 
 describe("configureWikiTools (write)", () => {
+  it("wiki_create_or_update_page falls back to ADO_DEFAULT_PROJECT when project is omitted", async () => {
+    const cfgWithDefault: ServerConfig = { ...config, defaultProject: "DefaultProj" };
+    const { calls, tools } = setup({ path: "/New", content: "hi" }, { config: cfgWithDefault, etag: '"v1"' });
+    await tools.get("wiki_create_or_update_page")!(
+      { wikiIdentifier: "MyWiki", path: "/New", content: "hi" },
+      {},
+    );
+    expect(calls[0]!.url).toContain("/DefaultCollection/DefaultProj/_apis/wiki/wikis/");
+  });
+
   it("registers the create-or-update tool", () => {
     const { tools } = setup();
     expect(tools.has("wiki_create_or_update_page")).toBe(true);
