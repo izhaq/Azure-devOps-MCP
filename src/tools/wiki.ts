@@ -8,7 +8,7 @@ import { AdoApiError } from "../azure/errors.js";
 /**
  * wiki domain: project wikis + pages.
  * Endpoints (Azure DevOps Server, api-version configurable). All are
- * project-scoped, so `project` is required on every tool.
+ * project-scoped; `project` falls back to ADO_DEFAULT_PROJECT when omitted.
  *   GET {project}/_apis/wiki/wikis                                  (wiki_list)
  *   GET {project}/_apis/wiki/wikis/{wikiIdentifier}/pages?path=    (wiki_get_page)
  *   PUT {project}/_apis/wiki/wikis/{wikiIdentifier}/pages?path=    (wiki_create_or_update_page)
@@ -22,7 +22,7 @@ const MAX_PATH_LENGTH = 1024;
 
 /**
  * Flatten a nested wiki page tree (subPages recursion) into an indented list
- * of paths. Used by wiki_get_page when recursionLevel is set — the model only
+ * of paths. Used by wiki_get_page when showSubSections=true — the model only
  * needs the structure, not the full per-page objects.
  */
 function flattenWikiTree(page: Record<string, unknown>, depth = 0): string[] {
@@ -52,9 +52,14 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "wiki_list",
     {
-      description: "List the wikis in a project.",
+      description:
+        "List the wikis in a project. Falls back to ADO_DEFAULT_PROJECT when project is omitted.",
       inputSchema: {
-        project: z.string().min(1).describe("Project name or ID"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         top: z
           .number()
           .int()
@@ -66,10 +71,11 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     },
     async ({ project, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       const cap = boundLimit(top, deps.config.maxResults);
       const result = await client.get<{ value?: Array<Record<string, unknown>> }>(
         "/_apis/wiki/wikis",
-        { project },
+        { project: effectiveProject },
       );
       // Slim to the fields a model needs to call wiki_get_page; full objects
       // carry repositoryId, mappedPath, versions, remoteUrl etc. that waste tokens.
@@ -86,14 +92,20 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     "wiki_get_page",
     {
       description:
-        "Get a wiki page by path, or list its sections. Two modes: " +
+        "Get a wiki page by path, or list its sections. Falls back to ADO_DEFAULT_PROJECT when project is omitted. " +
+        "Two modes: " +
         "(1) Read a page: omit recursionLevel (or set to 'none') — returns the markdown content and its eTag. " +
-        "(2) List sections/sub-pages: set recursionLevel to 'oneLevel' or 'full' — returns a compact indented " +
-        "path tree (NOT full objects). Use mode 2 to answer 'what sections does the wiki have?'. " +
+        "(2) List sections: set recursionLevel to 'oneLevel' or 'full' — returns the top-level section names " +
+        "by default (no sub-sections). Set showSubSections=true only when the user explicitly asks to see " +
+        "all nested sub-sections. Use mode 2 to answer 'what sections does the wiki have?'. " +
         "The eTag from mode 1 is required by wiki_create_or_update_page to edit the page. " +
         `Pages larger than ${MAX_INLINE_PAGE_BYTES} bytes have their content omitted.`,
       inputSchema: {
-        project: z.string().min(1).describe("Project name or ID"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
         path: z.string().min(1).max(MAX_PATH_LENGTH).describe("Page path, e.g. /Home or /Docs/Setup"),
         includeContent: z
@@ -109,12 +121,21 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
           .describe(
             "Sub-page listing depth: none (default — read single page), oneLevel, " +
             "oneLevelPlusNestedEmptyFolders, or full (entire tree). " +
-            "When set, returns a compact path list instead of full objects.",
+            "When set, returns a compact section list instead of full objects.",
+          ),
+        showSubSections: z
+          .boolean()
+          .optional()
+          .describe(
+            "When listing sections (recursionLevel set), include nested sub-sections in the output. " +
+            "Defaults to false — only top-level sections are shown. Set to true only when the user " +
+            "explicitly asks to see all sub-sections or the full nested tree.",
           ),
       },
     },
-    async ({ project, wikiIdentifier, path, includeContent, recursionLevel }, extra) => {
+    async ({ project, wikiIdentifier, path, includeContent, recursionLevel, showSubSections }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       // When listing sections (recursionLevel set), default to NOT fetching
       // content — the model wants structure, not the text of 17 pages.
       const listingTree = recursionLevel && recursionLevel !== "none";
@@ -127,17 +148,34 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
         "GET",
         `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
         undefined,
-        { project, query },
+        { project: effectiveProject, query },
       );
 
-      // Tree mode: return a compact indented path list instead of full objects.
-      // Full per-page objects (order, gitItemPath, isParentPage, subPages nesting…)
-      // are pure token waste when the model just wants to know what sections exist.
+      // Tree mode: return a compact section list instead of full objects.
+      // By default show only the top-level sections (direct children of `path`);
+      // a large wiki can have hundreds of nested pages which overwhelm a weak model.
+      // Set showSubSections=true only when the user explicitly wants the full tree.
       if (listingTree) {
-        const lines = flattenWikiTree(data);
+        if (showSubSections) {
+          const lines = flattenWikiTree(data);
+          return textResult(
+            `Wiki sections at '${path}' (${lines.length} total, including sub-sections):\n` +
+            lines.join("\n") +
+            (etag ? `\n\neTag: ${etag}` : ""),
+          );
+        }
+        // Default: top-level only — direct subPages of the requested path, no recursion.
+        const subPages = (data["subPages"] as Array<Record<string, unknown>> | undefined) ?? [];
+        const topLevel = subPages.map((p) => (p["path"] as string) ?? "?");
+        const hint =
+          topLevel.length > 0
+            ? `\n\nTo read a section, call wiki_get_page with that path. ` +
+              `To see sub-sections of a specific section, call wiki_get_page with that path and recursionLevel=oneLevel.`
+            : "";
         return textResult(
-          `Wiki sections at '${path}' (${lines.length} page${lines.length === 1 ? "" : "s"}):\n` +
-          lines.join("\n") +
+          `Wiki top-level sections at '${path}' (${topLevel.length}):\n` +
+          topLevel.join("\n") +
+          hint +
           (etag ? `\n\neTag: ${etag}` : ""),
         );
       }
@@ -160,14 +198,18 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     "wiki_create_or_update_page",
     {
       description:
-        "Create or edit a wiki page at a path. " +
+        "Create or edit a wiki page at a path. Falls back to ADO_DEFAULT_PROJECT when project is omitted. " +
         "IMPORTANT: To EDIT an existing page, you must first call wiki_get_page to retrieve its eTag, " +
         "then pass that eTag here — Azure DevOps requires it for optimistic concurrency. " +
         "Without eTag, edits to an existing page are rejected. " +
         "To CREATE a new page, omit eTag entirely. " +
         "Returns the saved page and its new eTag (save it if you plan to edit again).",
       inputSchema: {
-        project: z.string().min(1).describe("Project name or ID"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project name or ID; uses ADO_DEFAULT_PROJECT if not given"),
         wikiIdentifier: z.string().min(1).describe("Wiki id or name"),
         path: z.string().min(1).max(MAX_PATH_LENGTH).describe("Page path, e.g. /Home or /Docs/Setup"),
         content: z.string().describe("Markdown content for the page"),
@@ -182,13 +224,14 @@ export function configureWikiTools(server: McpServer, deps: ToolDeps): void {
     },
     async ({ project, wikiIdentifier, path, content, eTag }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
+      const effectiveProject = project ?? deps.config.defaultProject;
       try {
         const { data, etag } = await client.requestWithEtag<Record<string, unknown>>(
           "PUT",
           `/_apis/wiki/wikis/${encodeURIComponent(wikiIdentifier)}/pages`,
           { content },
           {
-            project,
+            project: effectiveProject,
             query: { path },
             headers: eTag ? { "If-Match": eTag } : undefined,
           },
