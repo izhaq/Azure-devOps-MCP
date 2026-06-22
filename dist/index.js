@@ -31455,7 +31455,7 @@ function configureCoreTools(server, deps) {
   server.registerTool(
     "core_list_projects",
     {
-      description: "List all team projects in the Azure DevOps collection.",
+      description: "List all team projects in the Azure DevOps collection. Returns {id, name, description, state}. Use the 'name' as the 'project' parameter in all other tools (wit_*, pr_*, repo_*, pipeline_*, wiki_*, work_*).",
       inputSchema: {
         top: external_exports.number().int().positive().optional().describe("Maximum number of projects to return")
       }
@@ -31475,7 +31475,7 @@ function configureCoreTools(server, deps) {
   server.registerTool(
     "core_list_teams",
     {
-      description: "List teams for a project, or all teams in the collection if no project is given.",
+      description: "List teams for a project, or all teams in the collection if no project is given. Returns {id, name, description, projectName}. Use the 'name' as the 'team' parameter in work_list_iterations, work_list_backlog_levels, and work_get_capacity.",
       inputSchema: {
         project: external_exports.string().optional().describe("Project name or ID; omit to list all teams")
       }
@@ -31694,7 +31694,7 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
   server.registerTool(
     "wit_get",
     {
-      description: "Get a single work item by id.",
+      description: "Get a single work item by id. Pass 'fields' for a specific field projection OR 'expand' for related data \u2014 they are mutually exclusive (ADO rejects both together).",
       inputSchema: {
         id: external_exports.number().int().positive().describe("Work item id"),
         fields: external_exports.array(external_exports.string()).optional().describe("Specific fields to return (reference names), e.g. System.Title"),
@@ -31772,17 +31772,16 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
     },
     async ({ project, id, text }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const STRIP_COMMENT_KEYS = /* @__PURE__ */ new Set(["renderedText", "reactions", "mentions", "format"]);
       const comment = await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) }
       );
-      const slim = {};
-      for (const [k, v] of Object.entries(comment)) {
-        if (!STRIP_COMMENT_KEYS.has(k)) slim[k] = v;
-      }
-      return asCleanText(slim);
+      return asCleanText({
+        id: comment["id"],
+        workItemId: comment["workItemId"],
+        createdDate: comment["createdDate"]
+      });
     }
   );
   server.registerTool(
@@ -31808,6 +31807,52 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
         };
       });
       return asCleanText(slim);
+    }
+  );
+  server.registerTool(
+    "wit_search",
+    {
+      description: "Search work items by title text. Returns a compact ticket list (same format as wit_list_my_work_items). Use this when looking for tickets about a topic without filtering by assignee. Falls back to ADO_DEFAULT_PROJECT when project is omitted.",
+      inputSchema: {
+        text: external_exports.string().min(1).describe("Text to match in work item titles"),
+        project: external_exports.string().min(1).optional().describe("Project to scope search; uses ADO_DEFAULT_PROJECT if not given"),
+        state: external_exports.string().min(1).optional().describe(
+          "State filter: 'open' (default, excludes Closed/Done/Resolved), 'all', or a comma-separated list e.g. 'Active,New'"
+        ),
+        top: external_exports.number().int().positive().optional().describe("Maximum number of results (default ADO_AGENT_LIST_CAP, bounded by ADO_MAX_RESULTS)")
+      }
+    },
+    async ({ text, project, state, top }, extra) => {
+      const client = deps.clientFor(patFromExtra(extra));
+      const cap = boundLimit(top ?? deps.config.agentListCap, deps.config.maxResults);
+      const effectiveProject = project ?? deps.config.defaultProject;
+      let allStates = false;
+      let states;
+      if (state) {
+        const normalized = state.trim().toLowerCase();
+        if (normalized === "all") allStates = true;
+        else if (normalized !== "open")
+          states = state.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+      const wiql = buildWorkItemQuery({ mine: false, titleContains: text, allStates, states });
+      const result = await client.post(
+        "/_apis/wit/wiql",
+        { query: wiql },
+        { project: effectiveProject }
+      );
+      const refs = (result?.workItems ?? []).filter(
+        (r) => typeof r?.id === "number"
+      );
+      const total = refs.length;
+      const ids = refs.slice(0, cap).map((r) => r.id);
+      if (ids.length === 0) return asTicketList([], { total: 0 });
+      const items = await client.workItemsBatch(
+        ids,
+        LIST_FIELDS
+      );
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const ordered = ids.map((id) => byId.get(id)).filter((it) => it !== void 0);
+      return asTicketList(ordered, { total });
     }
   );
 }
@@ -32030,21 +32075,23 @@ function configurePullRequestTools(server, deps) {
   server.registerTool(
     "pr_list",
     {
-      description: "List pull requests in a repository, optionally filtered by status or target branch.",
+      description: "List pull requests in a repository, optionally filtered by status, target branch, or source branch.",
       inputSchema: {
         repositoryId: external_exports.string().min(1).describe("Repository id or name"),
         project: external_exports.string().min(1).optional().describe("Project name or ID"),
         status: external_exports.enum(PR_STATUS).optional().describe("Filter by status: active (default), abandoned, completed, or all"),
         targetBranch: external_exports.string().min(1).optional().describe("Filter by target branch (short name or full ref)"),
+        sourceBranch: external_exports.string().min(1).optional().describe("Filter by source (feature) branch (short name or full ref)"),
         top: external_exports.number().int().positive().max(deps.config.maxResults).optional().describe("Maximum number of pull requests")
       }
     },
-    async ({ repositoryId, project, status, targetBranch, top }, extra) => {
+    async ({ repositoryId, project, status, targetBranch, sourceBranch, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const query = {
         "searchCriteria.status": status,
         "searchCriteria.targetRefName": targetBranch ? toRefName(targetBranch) : void 0,
+        "searchCriteria.sourceRefName": sourceBranch ? toRefName(sourceBranch) : void 0,
         $top: cap
       };
       const result = await client.get(
@@ -32358,18 +32405,37 @@ function configurePipelinesTools(server, deps) {
   server.registerTool(
     "pipeline_get",
     {
-      description: "Get a single pipeline by id, including its configuration.",
+      description: "Get a single pipeline definition by id. Returns id, name, folder, revision, and the configuration type/path/repository by default (safe for weak models). Set includeConfiguration=true to include variables, triggers, and queue config.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         pipelineId: external_exports.number().int().positive().describe("Pipeline id"),
-        pipelineVersion: external_exports.number().int().positive().optional().describe("Pipeline revision to retrieve; defaults to the latest")
+        pipelineVersion: external_exports.number().int().positive().optional().describe("Pipeline revision to retrieve; defaults to the latest"),
+        includeConfiguration: external_exports.boolean().optional().describe(
+          "Include the full pipeline configuration (variables, triggers, queue). Defaults to false \u2014 returns only id, name, folder, revision, and the configuration type/path/repository reference."
+        )
       }
     },
-    async ({ project, pipelineId, pipelineVersion }, extra) => {
+    async ({ project, pipelineId, pipelineVersion, includeConfiguration }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { pipelineVersion };
-      const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asCleanText(pipeline);
+      const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, {
+        project,
+        query
+      });
+      if (includeConfiguration) return asCleanText(pipeline);
+      const config2 = pipeline["configuration"];
+      const repo = config2?.["repository"];
+      return asCleanText({
+        id: pipeline["id"],
+        name: pipeline["name"],
+        folder: pipeline["folder"],
+        revision: pipeline["revision"],
+        configuration: config2 ? {
+          type: config2["type"],
+          path: config2["path"],
+          repository: repo ? { id: repo["id"], type: repo["type"], name: repo["name"] } : void 0
+        } : void 0
+      });
     }
   );
   server.registerTool(
@@ -32448,7 +32514,7 @@ function configurePipelinesTools(server, deps) {
   server.registerTool(
     "build_queue",
     {
-      description: "Queue (start) a new build for a pipeline definition. Optionally target a source branch and pass YAML template parameters.",
+      description: "Queue (start) a new build for a pipeline definition. Optionally target a source branch and pass YAML template parameters. Returns {id, buildNumber, status, queueTime, definition} \u2014 use build_get_logs with that buildId to follow progress.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         definitionId: external_exports.number().int().positive().describe("Pipeline definition id to queue"),
@@ -32461,8 +32527,17 @@ function configurePipelinesTools(server, deps) {
       const body = { definition: { id: definitionId } };
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
-      const build = await client.post("/_apis/build/builds", body, { project });
-      return asCleanText(build);
+      const build = await client.post("/_apis/build/builds", body, {
+        project
+      });
+      const def = build["definition"];
+      return asCleanText({
+        id: build["id"],
+        buildNumber: build["buildNumber"],
+        status: build["status"],
+        queueTime: build["queueTime"],
+        definition: def ? { id: def["id"], name: def["name"] } : void 0
+      });
     }
   );
   server.registerTool(
@@ -32552,7 +32627,19 @@ Path: ${sprint.path ?? ""}`
         workPath(team, "teamsettings/iterations"),
         { project: effectiveProject, query }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((i) => {
+        const it = i;
+        const attrs = it["attributes"] ?? {};
+        return {
+          id: it["id"],
+          name: it["name"],
+          path: it["path"],
+          startDate: attrs["startDate"]?.slice(0, 10),
+          finishDate: attrs["finishDate"]?.slice(0, 10),
+          timeFrame: attrs["timeFrame"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(

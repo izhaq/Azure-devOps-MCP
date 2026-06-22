@@ -129,6 +129,46 @@ describe("configurePipelinesTools (read)", () => {
     expect(calls[0]!.url).not.toContain("pipelineVersion");
   });
 
+  it("pipeline_get returns slim fields by default and full config when includeConfiguration=true", async () => {
+    const fullPipeline = {
+      id: 7,
+      name: "ci-build",
+      folder: "\\",
+      revision: 3,
+      configuration: {
+        type: "yaml",
+        path: "/azure-pipelines.yml",
+        repository: { id: "repo-guid", type: "azureReposGit", name: "my-repo" },
+        variables: { BIG: "lots of data" },
+        triggers: [{ type: "continuous" }],
+      },
+    };
+    const { tools } = setup(fullPipeline);
+
+    // Default (slim)
+    const slim = parseResult(
+      await tools.get("pipeline_get")!({ project: "Proj", pipelineId: 7 }, {}),
+    ) as Record<string, unknown>;
+    expect(slim["id"]).toBe(7);
+    expect(slim["name"]).toBe("ci-build");
+    const cfg = slim["configuration"] as Record<string, unknown>;
+    expect(cfg["type"]).toBe("yaml");
+    expect(cfg["path"]).toBe("/azure-pipelines.yml");
+    expect(cfg).not.toHaveProperty("variables");
+    expect(cfg).not.toHaveProperty("triggers");
+
+    // With includeConfiguration=true
+    const full = parseResult(
+      await tools.get("pipeline_get")!(
+        { project: "Proj", pipelineId: 7, includeConfiguration: true },
+        {},
+      ),
+    ) as Record<string, unknown>;
+    const fullCfg = full["configuration"] as Record<string, unknown>;
+    expect(fullCfg).toHaveProperty("variables");
+    expect(fullCfg).toHaveProperty("triggers");
+  });
+
   it("build_list applies definition/branch/status/result filters", async () => {
     const { calls, tools } = setup({ value: [{ id: 100 }] });
     await tools.get("build_list")!(
@@ -203,6 +243,28 @@ describe("configurePipelinesTools (write + logs)", () => {
     const { calls, tools } = setup({ id: 101 });
     await tools.get("build_queue")!({ project: "Proj", definitionId: 5 }, {});
     expect(calls[0]!.body).toEqual({ definition: { id: 5 } });
+  });
+
+  it("build_queue returns a slim confirmation object", async () => {
+    const { tools } = setup({
+      id: 42,
+      buildNumber: "20240101.1",
+      status: "notStarted",
+      queueTime: "2024-01-01T00:00:00Z",
+      definition: { id: 5, name: "ci-build" },
+      orchestrationPlan: { planId: "guid" },
+      validationResults: [],
+    });
+    const result = parseResult(
+      await tools.get("build_queue")!({ project: "Proj", definitionId: 5 }, {}),
+    ) as Record<string, unknown>;
+    expect(result["id"]).toBe(42);
+    expect(result["buildNumber"]).toBe("20240101.1");
+    expect(result["status"]).toBe("notStarted");
+    expect(result).not.toHaveProperty("orchestrationPlan");
+    expect(result).not.toHaveProperty("validationResults");
+    const def = result["definition"] as Record<string, unknown>;
+    expect(def["name"]).toBe("ci-build");
   });
 
   it("build_get_logs lists logs when no logId is given", async () => {

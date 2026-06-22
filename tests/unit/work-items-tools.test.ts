@@ -74,6 +74,7 @@ const TOOLS = [
   "wit_update",
   "wit_add_comment",
   "wit_list_types",
+  "wit_search",
 ];
 
 describe("configureWorkItemsTools", () => {
@@ -242,6 +243,34 @@ describe("configureWorkItemsTools", () => {
     expect(calls[0]!.body).toEqual({ text: "hi" });
   });
 
+  it("wit_add_comment returns only id, workItemId, createdDate", async () => {
+    const { tools } = setup({
+      id: 55,
+      workItemId: 100,
+      createdDate: "2024-06-01T10:00:00Z",
+      text: "hi",
+      createdBy: { displayName: "Alice" },
+      renderedText: "<p>hi</p>",
+      reactions: [],
+      _links: { self: { href: "..." } },
+    });
+    const result = JSON.parse(
+      (
+        (await tools.get("wit_add_comment")!({ project: "Proj", id: 100, text: "hi" }, {})) as {
+          content: Array<{ text: string }>;
+        }
+      ).content[0]!.text,
+    ) as Record<string, unknown>;
+    expect(result).toEqual({
+      id: 55,
+      workItemId: 100,
+      createdDate: "2024-06-01T10:00:00Z",
+    });
+    expect(result).not.toHaveProperty("text");
+    expect(result).not.toHaveProperty("createdBy");
+    expect(result).not.toHaveProperty("renderedText");
+  });
+
   it("wit_list_types lists work item types for a project", async () => {
     const { calls, tools } = setup({ value: [{ name: "Bug" }, { name: "Task" }] });
     const result = (await tools.get("wit_list_types")!({ project: "Proj" }, {})) as {
@@ -261,7 +290,7 @@ describe("configureWorkItemsTools", () => {
 });
 
 /** Fetch that returns a different body per endpoint, recording each call. */
-function routedSetup(routes: (url: string) => unknown) {
+function routedSetup(routes: (url: string) => unknown, cfg: ServerConfig = config) {
   const calls: Call[] = [];
   const impl = (async (url: string | URL | Request, init?: RequestInit) => {
     const headers = init?.headers as Record<string, string> | undefined;
@@ -278,7 +307,7 @@ function routedSetup(routes: (url: string) => unknown) {
     });
   }) as unknown as typeof fetch;
   const { server, tools } = fakeServer();
-  configureWorkItemsTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+  configureWorkItemsTools(server, createToolDeps({ config: cfg, logger, fetchImpl: impl }));
   return { calls, tools };
 }
 
@@ -426,5 +455,60 @@ describe("wit_list_my_work_items", () => {
     await tools.get("wit_list_my_work_items")!({}, {});
     const batch = calls.find((c) => c.url.includes("workitemsbatch"))!;
     expect((batch.body as { ids: number[] }).ids).toEqual([7]);
+  });
+});
+
+describe("wit_search", () => {
+  it("queries work items by title text without an assignee filter", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("/wiql")) return { workItems: [{ id: 1 }, { id: 2 }] };
+      if (url.includes("workitemsbatch"))
+        return {
+          value: [
+            {
+              id: 1,
+              fields: {
+                "System.Id": 1,
+                "System.Title": "Login bug",
+                "System.State": "Active",
+                "System.WorkItemType": "Bug",
+                "System.AssignedTo": null,
+                "System.CreatedBy": "Alice",
+              },
+            },
+            {
+              id: 2,
+              fields: {
+                "System.Id": 2,
+                "System.Title": "Login flow refactor",
+                "System.State": "New",
+                "System.WorkItemType": "Task",
+                "System.AssignedTo": null,
+                "System.CreatedBy": "Bob",
+              },
+            },
+          ],
+        };
+      return {};
+    });
+    const result = (await tools.get("wit_search")!({ text: "Login" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const text = result.content[0]!.text;
+    expect(text).toContain("Login bug");
+    expect(text).toContain("Login flow refactor");
+    const wiqlBody = calls.find((c) => c.url.includes("/wiql"))!.body as { query: string };
+    expect(wiqlBody.query).not.toContain("@Me");
+    expect(wiqlBody.query).toContain("Login");
+  });
+
+  it("falls back to ADO_DEFAULT_PROJECT when project is omitted", async () => {
+    const cfgWithDefault: ServerConfig = { ...config, defaultProject: "DefaultProj" };
+    const { calls, tools } = routedSetup(
+      (url) => (url.includes("/wiql") ? { workItems: [] } : {}),
+      cfgWithDefault,
+    );
+    await tools.get("wit_search")!({ text: "something" }, {});
+    expect(calls[0]!.url).toContain("/DefaultCollection/DefaultProj/_apis/wit/wiql");
   });
 });

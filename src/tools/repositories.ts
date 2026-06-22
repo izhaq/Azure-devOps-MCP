@@ -332,7 +332,8 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
   server.registerTool(
     "pr_list",
     {
-      description: "List pull requests in a repository, optionally filtered by status or target branch.",
+      description:
+        "List pull requests in a repository, optionally filtered by status, target branch, or source branch.",
       inputSchema: {
         repositoryId: z.string().min(1).describe("Repository id or name"),
         project: z.string().min(1).optional().describe("Project name or ID"),
@@ -345,6 +346,11 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
           .min(1)
           .optional()
           .describe("Filter by target branch (short name or full ref)"),
+        sourceBranch: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filter by source (feature) branch (short name or full ref)"),
         top: z
           .number()
           .int()
@@ -354,12 +360,13 @@ export function configurePullRequestTools(server: McpServer, deps: ToolDeps): vo
           .describe("Maximum number of pull requests"),
       },
     },
-    async ({ repositoryId, project, status, targetBranch, top }, extra) => {
+    async ({ repositoryId, project, status, targetBranch, sourceBranch, top }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const cap = boundLimit(top, deps.config.maxResults);
       const query: Record<string, QueryValue> = {
         "searchCriteria.status": status,
         "searchCriteria.targetRefName": targetBranch ? toRefName(targetBranch) : undefined,
+        "searchCriteria.sourceRefName": sourceBranch ? toRefName(sourceBranch) : undefined,
         $top: cap,
       };
       const result = await client.get<{ value?: unknown[] }>(

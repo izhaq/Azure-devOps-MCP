@@ -146,6 +146,37 @@ describe("configureWorkTools", () => {
     expect(iterations).toHaveLength(1);
   });
 
+  it("work_list_iterations slims to essential fields", async () => {
+    const { tools } = setup({
+      value: [
+        {
+          id: "guid-1",
+          name: "Sprint 1",
+          path: "Proj\\Sprint 1",
+          url: "https://...",
+          attributes: {
+            startDate: "2024-01-01T00:00:00Z",
+            finishDate: "2024-01-14T00:00:00Z",
+            timeFrame: "past",
+          },
+        },
+      ],
+    });
+    const iters = parseResult(
+      await tools.get("work_list_iterations")!({ project: "Proj" }, {}),
+    ) as Array<Record<string, unknown>>;
+    expect(iters[0]).toEqual({
+      id: "guid-1",
+      name: "Sprint 1",
+      path: "Proj\\Sprint 1",
+      startDate: "2024-01-01",
+      finishDate: "2024-01-14",
+      timeFrame: "past",
+    });
+    expect(iters[0]).not.toHaveProperty("url");
+    expect(iters[0]).not.toHaveProperty("attributes");
+  });
+
   it("work_list_backlog_levels targets the team-scoped backlogs endpoint", async () => {
     const { calls, tools } = setup({ value: [{ id: "Microsoft.EpicCategory" }] });
     const levels = parseResult(

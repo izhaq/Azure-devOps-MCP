@@ -19,7 +19,10 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "core_list_projects",
     {
-      description: "List all team projects in the Azure DevOps collection.",
+      description:
+        "List all team projects in the Azure DevOps collection. " +
+        "Returns {id, name, description, state}. Use the 'name' as the 'project' " +
+        "parameter in all other tools (wit_*, pr_*, repo_*, pipeline_*, wiki_*, work_*).",
       inputSchema: {
         top: z.number().int().positive().optional().describe("Maximum number of projects to return"),
       },
@@ -43,7 +46,10 @@ export function configureCoreTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "core_list_teams",
     {
-      description: "List teams for a project, or all teams in the collection if no project is given.",
+      description:
+        "List teams for a project, or all teams in the collection if no project is given. " +
+        "Returns {id, name, description, projectName}. Use the 'name' as the 'team' " +
+        "parameter in work_list_iterations, work_list_backlog_levels, and work_get_capacity.",
       inputSchema: {
         project: z.string().optional().describe("Project name or ID; omit to list all teams"),
       },
