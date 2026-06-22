@@ -92,7 +92,10 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
   server.registerTool(
     "pipeline_get",
     {
-      description: "Get a single pipeline by id, including its configuration.",
+      description:
+        "Get a single pipeline definition by id. Returns id, name, folder, revision, and the " +
+        "configuration type/path/repository by default (safe for weak models). " +
+        "Set includeConfiguration=true to include variables, triggers, and queue config.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         pipelineId: z.number().int().positive().describe("Pipeline id"),
@@ -102,13 +105,41 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
           .positive()
           .optional()
           .describe("Pipeline revision to retrieve; defaults to the latest"),
+        includeConfiguration: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include the full pipeline configuration (variables, triggers, queue). " +
+              "Defaults to false — returns only id, name, folder, revision, and the " +
+              "configuration type/path/repository reference.",
+          ),
       },
     },
-    async ({ project, pipelineId, pipelineVersion }, extra) => {
+    async ({ project, pipelineId, pipelineVersion, includeConfiguration }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const query: Record<string, QueryValue> = { pipelineVersion };
-      const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asCleanText(pipeline);
+      const pipeline = await client.get<Record<string, unknown>>(`/_apis/pipelines/${pipelineId}`, {
+        project,
+        query,
+      });
+      if (includeConfiguration) return asCleanText(pipeline);
+      const config = pipeline["configuration"] as Record<string, unknown> | undefined;
+      const repo = config?.["repository"] as Record<string, unknown> | undefined;
+      return asCleanText({
+        id: pipeline["id"],
+        name: pipeline["name"],
+        folder: pipeline["folder"],
+        revision: pipeline["revision"],
+        configuration: config
+          ? {
+              type: config["type"],
+              path: config["path"],
+              repository: repo
+                ? { id: repo["id"], type: repo["type"], name: repo["name"] }
+                : undefined,
+            }
+          : undefined,
+      });
     },
   );
 
@@ -207,7 +238,9 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
     {
       description:
         "Queue (start) a new build for a pipeline definition. Optionally target a " +
-        "source branch and pass YAML template parameters.",
+        "source branch and pass YAML template parameters. " +
+        "Returns {id, buildNumber, status, queueTime, definition} — use build_get_logs " +
+        "with that buildId to follow progress.",
       inputSchema: {
         project: z.string().min(1).describe("Project name or ID"),
         definitionId: z.number().int().positive().describe("Pipeline definition id to queue"),
@@ -227,8 +260,17 @@ export function configurePipelinesTools(server: McpServer, deps: ToolDeps): void
       const body: Record<string, unknown> = { definition: { id: definitionId } };
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
-      const build = await client.post("/_apis/build/builds", body, { project });
-      return asCleanText(build);
+      const build = await client.post<Record<string, unknown>>("/_apis/build/builds", body, {
+        project,
+      });
+      const def = build["definition"] as Record<string, unknown> | undefined;
+      return asCleanText({
+        id: build["id"],
+        buildNumber: build["buildNumber"],
+        status: build["status"],
+        queueTime: build["queueTime"],
+        definition: def ? { id: def["id"], name: def["name"] } : undefined,
+      });
     },
   );
 

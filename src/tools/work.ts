@@ -97,7 +97,19 @@ export function configureWorkTools(server: McpServer, deps: ToolDeps): void {
         workPath(team, "teamsettings/iterations"),
         { project: effectiveProject, query },
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((i) => {
+        const it = i as Record<string, unknown>;
+        const attrs = (it["attributes"] as Record<string, unknown>) ?? {};
+        return {
+          id: it["id"],
+          name: it["name"],
+          path: it["path"],
+          startDate: (attrs["startDate"] as string | undefined)?.slice(0, 10),
+          finishDate: (attrs["finishDate"] as string | undefined)?.slice(0, 10),
+          timeFrame: attrs["timeFrame"],
+        };
+      });
+      return asCleanText(slim);
     },
   );
 

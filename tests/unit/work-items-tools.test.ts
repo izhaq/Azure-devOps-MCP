@@ -242,6 +242,34 @@ describe("configureWorkItemsTools", () => {
     expect(calls[0]!.body).toEqual({ text: "hi" });
   });
 
+  it("wit_add_comment returns only id, workItemId, createdDate", async () => {
+    const { tools } = setup({
+      id: 55,
+      workItemId: 100,
+      createdDate: "2024-06-01T10:00:00Z",
+      text: "hi",
+      createdBy: { displayName: "Alice" },
+      renderedText: "<p>hi</p>",
+      reactions: [],
+      _links: { self: { href: "..." } },
+    });
+    const result = JSON.parse(
+      (
+        (await tools.get("wit_add_comment")!({ project: "Proj", id: 100, text: "hi" }, {})) as {
+          content: Array<{ text: string }>;
+        }
+      ).content[0]!.text,
+    ) as Record<string, unknown>;
+    expect(result).toEqual({
+      id: 55,
+      workItemId: 100,
+      createdDate: "2024-06-01T10:00:00Z",
+    });
+    expect(result).not.toHaveProperty("text");
+    expect(result).not.toHaveProperty("createdBy");
+    expect(result).not.toHaveProperty("renderedText");
+  });
+
   it("wit_list_types lists work item types for a project", async () => {
     const { calls, tools } = setup({ value: [{ name: "Bug" }, { name: "Task" }] });
     const result = (await tools.get("wit_list_types")!({ project: "Proj" }, {})) as {

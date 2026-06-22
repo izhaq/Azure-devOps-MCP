@@ -416,17 +416,16 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
     },
     async ({ project, id, text }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const STRIP_COMMENT_KEYS = new Set(["renderedText", "reactions", "mentions", "format"]);
       const comment = (await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) },
       )) as Record<string, unknown>;
-      const slim: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(comment)) {
-        if (!STRIP_COMMENT_KEYS.has(k)) slim[k] = v;
-      }
-      return asCleanText(slim);
+      return asCleanText({
+        id: comment["id"],
+        workItemId: comment["workItemId"],
+        createdDate: comment["createdDate"],
+      });
     },
   );
 

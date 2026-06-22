@@ -31772,17 +31772,16 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
     },
     async ({ project, id, text }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const STRIP_COMMENT_KEYS = /* @__PURE__ */ new Set(["renderedText", "reactions", "mentions", "format"]);
       const comment = await client.post(
         `/_apis/wit/workItems/${id}/comments`,
         { text },
         { project, apiVersion: toPreviewVersion(deps.config.apiVersion, 3) }
       );
-      const slim = {};
-      for (const [k, v] of Object.entries(comment)) {
-        if (!STRIP_COMMENT_KEYS.has(k)) slim[k] = v;
-      }
-      return asCleanText(slim);
+      return asCleanText({
+        id: comment["id"],
+        workItemId: comment["workItemId"],
+        createdDate: comment["createdDate"]
+      });
     }
   );
   server.registerTool(
@@ -32358,18 +32357,37 @@ function configurePipelinesTools(server, deps) {
   server.registerTool(
     "pipeline_get",
     {
-      description: "Get a single pipeline by id, including its configuration.",
+      description: "Get a single pipeline definition by id. Returns id, name, folder, revision, and the configuration type/path/repository by default (safe for weak models). Set includeConfiguration=true to include variables, triggers, and queue config.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         pipelineId: external_exports.number().int().positive().describe("Pipeline id"),
-        pipelineVersion: external_exports.number().int().positive().optional().describe("Pipeline revision to retrieve; defaults to the latest")
+        pipelineVersion: external_exports.number().int().positive().optional().describe("Pipeline revision to retrieve; defaults to the latest"),
+        includeConfiguration: external_exports.boolean().optional().describe(
+          "Include the full pipeline configuration (variables, triggers, queue). Defaults to false \u2014 returns only id, name, folder, revision, and the configuration type/path/repository reference."
+        )
       }
     },
-    async ({ project, pipelineId, pipelineVersion }, extra) => {
+    async ({ project, pipelineId, pipelineVersion, includeConfiguration }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
       const query = { pipelineVersion };
-      const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, { project, query });
-      return asCleanText(pipeline);
+      const pipeline = await client.get(`/_apis/pipelines/${pipelineId}`, {
+        project,
+        query
+      });
+      if (includeConfiguration) return asCleanText(pipeline);
+      const config2 = pipeline["configuration"];
+      const repo = config2?.["repository"];
+      return asCleanText({
+        id: pipeline["id"],
+        name: pipeline["name"],
+        folder: pipeline["folder"],
+        revision: pipeline["revision"],
+        configuration: config2 ? {
+          type: config2["type"],
+          path: config2["path"],
+          repository: repo ? { id: repo["id"], type: repo["type"], name: repo["name"] } : void 0
+        } : void 0
+      });
     }
   );
   server.registerTool(
@@ -32448,7 +32466,7 @@ function configurePipelinesTools(server, deps) {
   server.registerTool(
     "build_queue",
     {
-      description: "Queue (start) a new build for a pipeline definition. Optionally target a source branch and pass YAML template parameters.",
+      description: "Queue (start) a new build for a pipeline definition. Optionally target a source branch and pass YAML template parameters. Returns {id, buildNumber, status, queueTime, definition} \u2014 use build_get_logs with that buildId to follow progress.",
       inputSchema: {
         project: external_exports.string().min(1).describe("Project name or ID"),
         definitionId: external_exports.number().int().positive().describe("Pipeline definition id to queue"),
@@ -32461,8 +32479,17 @@ function configurePipelinesTools(server, deps) {
       const body = { definition: { id: definitionId } };
       if (sourceBranch) body["sourceBranch"] = toRefName(sourceBranch);
       if (templateParameters) body["templateParameters"] = templateParameters;
-      const build = await client.post("/_apis/build/builds", body, { project });
-      return asCleanText(build);
+      const build = await client.post("/_apis/build/builds", body, {
+        project
+      });
+      const def = build["definition"];
+      return asCleanText({
+        id: build["id"],
+        buildNumber: build["buildNumber"],
+        status: build["status"],
+        queueTime: build["queueTime"],
+        definition: def ? { id: def["id"], name: def["name"] } : void 0
+      });
     }
   );
   server.registerTool(
@@ -32552,7 +32579,19 @@ Path: ${sprint.path ?? ""}`
         workPath(team, "teamsettings/iterations"),
         { project: effectiveProject, query }
       );
-      return asCleanText((result.value ?? []).slice(0, cap));
+      const slim = (result.value ?? []).slice(0, cap).map((i) => {
+        const it = i;
+        const attrs = it["attributes"] ?? {};
+        return {
+          id: it["id"],
+          name: it["name"],
+          path: it["path"],
+          startDate: attrs["startDate"]?.slice(0, 10),
+          finishDate: attrs["finishDate"]?.slice(0, 10),
+          timeFrame: attrs["timeFrame"]
+        };
+      });
+      return asCleanText(slim);
     }
   );
   server.registerTool(
