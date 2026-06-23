@@ -73,9 +73,11 @@ docs/intent/ci-deploy-sanity.md → confirmed intent
    the `<envParam>` `values:` → else `none` with a message telling the user to
    set `ADO_DEPLOY_ENVS`. For the agent to *offer*; cheap, read-only.
 
-2. **`deploy_feature_branch({ branch, env, project? })`** — validate `env`
-   against `list_deploy_envs`; on miss, reject with the valid list (shared-env
-   safety). Then `build_queue(ADO_DEPLOY_PIPELINE_ID, sourceBranch=branch,
+2. **`deploy_feature_branch({ branch, env, confirm, project? })`** — require
+   `confirm: true` (a deploy overwrites a **shared** env; the flag forces the
+   agent to surface the action and the human to assent). Validate `env` against
+   `list_deploy_envs`; on miss, reject with the valid list. Then
+   `build_queue(ADO_DEPLOY_PIPELINE_ID, sourceBranch=branch,
    templateParameters={ [envParam]: env })`. Returns a run handle:
    `{ runId, buildNumber, status, env, branch, webUrl }`.
 
@@ -134,12 +136,13 @@ Keep coverage above the configured thresholds; rebuild the committed bundle.
 
 ## Boundaries
 
-- **Always:** validate `env` against the offered list before queuing; keep the
-  weak-LLM rules (compact output, byte-bounded logs, one call per action);
-  reuse existing primitives and `_shared` helpers; clear "not configured" errors.
-- **Ask first:** adding a runtime dependency (e.g. a YAML parser — Open Q1);
-  using the newer Pipelines run API instead of `build_queue`; any change to an
-  existing tool's input schema.
+- **Always:** require `confirm: true` on `deploy_feature_branch`; validate `env`
+  against the offered list before queuing; keep the weak-LLM rules (compact
+  output, byte-bounded logs, one call per action); reuse existing primitives and
+  `_shared` helpers; clear "not configured" errors.
+- **Ask first:** adding a runtime dependency (none planned — env parsing is
+  dependency-free); using the newer Pipelines run API instead of `build_queue`;
+  any change to an existing tool's input schema.
 - **Never:** let the AI auto-pick an env; deploy to an env not in the resolved
   list; dump full pipeline logs into the model; block the call waiting for a run
   to finish.
@@ -159,27 +162,23 @@ Keep coverage above the configured thresholds; rebuild the committed bundle.
       rebuilt and committed.
 - [ ] Existing tools unchanged.
 
-## Open Questions (to close before/within PLAN)
+## Resolved Decisions (SPECIFY gate, confirmed)
 
-1. **YAML discovery robustness / dependency.** Parsing the `env` parameter's
-   `values:` from pipeline YAML. Options: (a) dependency-free targeted extraction
-   of the named parameter's `values:` block (brittle on exotic YAML, zero deps —
-   **recommended** for the air-gapped bundle, with config as the reliable
-   override); (b) add a small bundled YAML parser (needs dependency approval);
-   (c) config-only, discovery dropped. Which?
-2. **Run-handle shape / web URL.** Include `webUrl`
-   (`{server}/{collection}/{project}/_build/results?buildId={id}`) so the human
-   can click through? Assumed yes.
-3. **Failure-log curation rule.** Which record when several fail (first vs last),
-   and tail size — propose **last failed leaf step, last ~100 lines, capped at
-   the existing inline byte budget**. OK?
-4. **Shared-env safety.** Is strict env-validation enough, or should
-   `deploy_feature_branch` require an explicit `confirm: true` (or rely on the
-   harness's tool-approval prompt) given it overwrites a shared env?
-5. **Does `run_sanity` need `branch`?** Assumed **env-only** (it tests whatever
-   is deployed there). Confirm.
-6. **Trigger API.** Use existing `build_queue` (Build API) vs the newer Pipelines
-   run API? Assumed `build_queue` (already supports branch + templateParameters).
-7. **Naming / domain.** New `deploy` domain with tools `list_deploy_envs`,
-   `deploy_feature_branch`, `run_sanity`, `pipeline_run_status`. Names OK, or
-   prefix all with `deploy_` / fold into `pipelines`?
+1. **Env discovery:** dependency-free **targeted parse** of the deploy pipeline
+   YAML's `<envParam>` `values:` block — **no new dependency**; configured
+   `ADO_DEPLOY_ENVS` is the reliable override and the fallback when parsing
+   can't find the list.
+2. **Run handle includes `webUrl`** (`{server}/{collection}/{project}/_build/results?buildId={id}`).
+3. **Failure-log curation:** the **last failed leaf step** from the timeline,
+   its **last ~100 lines**, capped at the existing inline byte budget.
+4. **Shared-env safety:** `deploy_feature_branch` **requires `confirm: true`**
+   (in addition to strict env validation).
+5. **`run_sanity` is env-only** (no branch).
+6. **Trigger API:** `build_queue` (Build API) — already supports `sourceBranch`
+   + `templateParameters`.
+7. **Naming:** `list_deploy_envs`, `deploy_feature_branch`, `run_sanity`,
+   `pipeline_run_status` in a new `deploy` domain.
+
+## Open Questions
+
+None blocking. (Future v2: webhook/push "notify on finish".)
