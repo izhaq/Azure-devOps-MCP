@@ -56,6 +56,8 @@ export interface RequestOptions {
 export class AzureDevOpsClient {
   private readonly opts: AzureClientOptions;
   private readonly doFetch: typeof fetch;
+  /** Cache for `getAuthenticatedIdentity` within this client's lifetime. */
+  private cachedIdentity?: { displayName?: string } | null;
 
   constructor(opts: AzureClientOptions) {
     this.opts = opts;
@@ -207,6 +209,60 @@ export class AzureDevOpsClient {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Best-effort resolution of the authenticated user (the PAT owner) to the
+   * server's canonical display name, via the collection `connectionData`
+   * endpoint. Used to default a new work item's assignee to "@Me". Cached for
+   * this client's lifetime; returns `undefined` on any error so callers never
+   * block on it.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/core/connection-data
+   */
+  async getAuthenticatedIdentity(): Promise<{ displayName?: string } | undefined> {
+    if (this.cachedIdentity !== undefined) return this.cachedIdentity ?? undefined;
+    try {
+      const data = await this.get<{
+        authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string };
+      }>("/_apis/connectionData");
+      const user = data?.authenticatedUser;
+      const displayName = user?.customDisplayName ?? user?.providerDisplayName;
+      this.cachedIdentity = displayName ? { displayName } : null;
+    } catch {
+      this.cachedIdentity = null;
+    }
+    return this.cachedIdentity ?? undefined;
+  }
+
+  /**
+   * List a work item type's fields (with allowed values) for a project. Used to
+   * discover required fields + pick-lists when creating a work item, so the
+   * harness can auto-fill or offer choices instead of guessing.
+   * Source: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-item-types-field/list
+   */
+  async getWorkItemTypeFields(
+    project: string,
+    type: string,
+  ): Promise<
+    Array<{
+      referenceName: string;
+      name?: string;
+      alwaysRequired?: boolean;
+      allowedValues?: string[];
+      defaultValue?: unknown;
+    }>
+  > {
+    const res = await this.get<{ value?: Array<Record<string, unknown>> }>(
+      `/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields`,
+      { project, query: { $expand: "allowedValues" } },
+    );
+    return (res?.value ?? []).map((f) => ({
+      referenceName: String(f["referenceName"] ?? ""),
+      name: f["name"] as string | undefined,
+      alwaysRequired: f["alwaysRequired"] as boolean | undefined,
+      allowedValues: Array.isArray(f["allowedValues"]) ? (f["allowedValues"] as string[]) : undefined,
+      defaultValue: f["defaultValue"],
+    }));
   }
 
   private async request<T>(

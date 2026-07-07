@@ -210,19 +210,181 @@ describe("configureWorkItemsTools", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("wit_create POSTs a JSON-Patch document with json-patch content type", async () => {
-    const { calls, tools } = setup({ id: 100 });
-    await tools.get("wit_create")!(
-      { project: "Proj", type: "Bug", fields: { "System.Title": "Boom", "System.State": "New" } },
-      {},
-    );
-    expect(calls[0]!.method).toBe("POST");
-    expect(calls[0]!.url).toContain("/DefaultCollection/Proj/_apis/wit/workitems/$Bug");
-    expect(calls[0]!.contentType).toBe("application/json-patch+json");
-    expect(calls[0]!.body).toEqual([
+  const createRoutes = (url: string): unknown => {
+    if (url.includes("connectionData")) return { authenticatedUser: { providerDisplayName: "Me Dev" } };
+    if (url.includes("workitemtypes"))
+      return {
+        value: [
+          { referenceName: "System.Title", alwaysRequired: true },
+          { referenceName: "System.State", alwaysRequired: true },
+        ],
+      };
+    if (url.includes("/workitems/$"))
+      return {
+        id: 100,
+        fields: {
+          "System.WorkItemType": "Bug",
+          "System.Title": "Boom",
+          "System.State": "New",
+          "System.AssignedTo": { displayName: "Me Dev" },
+        },
+        _links: { html: { href: "http://web/edit/100" } },
+      };
+    return {};
+  };
+  const createCall = (calls: Call[]) => calls.find((c) => c.url.includes("/workitems/$"))!;
+
+  it("wit_create (fast) creates with title, defaults assignee to @Me, returns webUrl", async () => {
+    const { calls, tools } = routedSetup(createRoutes);
+    const res = (await tools.get("wit_create")!({ type: "Bug", title: "Boom", project: "Proj" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const post = createCall(calls);
+    expect(post.method).toBe("POST");
+    expect(post.url).toContain("/DefaultCollection/Proj/_apis/wit/workitems/$Bug");
+    expect(post.contentType).toBe("application/json-patch+json");
+    expect(post.body).toEqual([
       { op: "add", path: "/fields/System.Title", value: "Boom" },
-      { op: "add", path: "/fields/System.State", value: "New" },
+      { op: "add", path: "/fields/System.AssignedTo", value: "Me Dev" },
     ]);
+    const out = JSON.parse(res.content[0]!.text) as Record<string, unknown>;
+    expect(out.id).toBe(100);
+    expect(out.webUrl).toBe("http://web/edit/100");
+    expect(out.assignedTo).toBe("Me Dev");
+  });
+
+  it("wit_create honors an explicit assignedTo (no @Me lookup)", async () => {
+    const { calls, tools } = routedSetup(createRoutes);
+    await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj", assignedTo: "Alice" }, {});
+    const post = createCall(calls);
+    expect(post.body).toContainEqual({ op: "add", path: "/fields/System.AssignedTo", value: "Alice" });
+    expect(calls.some((c) => c.url.includes("connectionData"))).toBe(false);
+  });
+
+  it("wit_create proceeds unassigned when @Me cannot be resolved", async () => {
+    const { calls, tools } = routedSetup((url) => (url.includes("connectionData") ? {} : createRoutes(url)));
+    await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj" }, {});
+    const post = createCall(calls);
+    expect(post.body).toEqual([{ op: "add", path: "/fields/System.Title", value: "X" }]);
+  });
+
+  it("wit_create links a parent via Hierarchy-Reverse", async () => {
+    const { calls, tools } = routedSetup(createRoutes);
+    await tools.get("wit_create")!({ type: "Task", title: "T", project: "Proj", parent: 55 }, {});
+    const rel = (createCall(calls).body as Array<{ path: string; value?: { rel?: string; url?: string } }>).find(
+      (op) => op.path === "/relations/-",
+    );
+    expect(rel!.value!.rel).toBe("System.LinkTypes.Hierarchy-Reverse");
+    expect(rel!.value!.url).toContain("/_apis/wit/workItems/55");
+  });
+
+  it("wit_create guided:true returns a field form and creates nothing", async () => {
+    const { calls, tools } = routedSetup(createRoutes);
+    const res = (await tools.get("wit_create")!(
+      { type: "Bug", title: "X", project: "Proj", guided: true },
+      {},
+    )) as { content: Array<{ text: string }> };
+    const out = JSON.parse(res.content[0]!.text) as { mode: string; fields: unknown[] };
+    expect(out.mode).toBe("guided");
+    expect(Array.isArray(out.fields)).toBe(true);
+    expect(calls.some((c) => c.url.includes("/workitems/$"))).toBe(false);
+  });
+
+  it("wit_create errors clearly when no project and no default is set", async () => {
+    const { calls, tools } = routedSetup(createRoutes);
+    const res = (await tools.get("wit_create")!({ type: "Bug", title: "X" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    expect(res.content[0]!.text).toContain("ADO_DEFAULT_PROJECT");
+    expect(calls.some((c) => c.url.includes("/workitems/$"))).toBe(false);
+  });
+
+  it("wit_get includes the web link (webUrl)", async () => {
+    const { tools } = setup({ id: 42, fields: {}, _links: { html: { href: "http://web/42" } } });
+    const res = (await tools.get("wit_get")!({ id: 42 }, {})) as { content: Array<{ text: string }> };
+    expect(res.content[0]!.text).toContain('"webUrl":"http://web/42"');
+  });
+
+  // ----- review-fix regression tests -----
+
+  it("wit_create does NOT auto-pick a value for a multi-option required field", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("connectionData")) return { authenticatedUser: { providerDisplayName: "Me Dev" } };
+      if (url.includes("workitemtypes"))
+        return { value: [{ referenceName: "Custom.Category", name: "Category", alwaysRequired: true, allowedValues: ["A", "B", "C"] }] };
+      return { id: 1, fields: {} };
+    });
+    const res = (await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    expect(res.content[0]!.text).toContain("Custom.Category");
+    expect(calls.some((c) => c.url.includes("/workitems/$"))).toBe(false); // did not create
+  });
+
+  it("wit_create treats an empty-string defaultValue as no default (falls through to the sole allowed value)", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("connectionData")) return { authenticatedUser: { providerDisplayName: "Me Dev" } };
+      if (url.includes("workitemtypes"))
+        return { value: [{ referenceName: "Custom.Env", alwaysRequired: true, defaultValue: "", allowedValues: ["only"] }] };
+      if (url.includes("/workitems/$")) return { id: 1, fields: {} };
+      return {};
+    });
+    await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj" }, {});
+    const post = createCall(calls);
+    expect(post.body).toContainEqual({ op: "add", path: "/fields/Custom.Env", value: "only" });
+  });
+
+  it("wit_create never blocks on a required System.AssignedTo when @Me is unresolved", async () => {
+    const { calls, tools } = routedSetup((url) => {
+      if (url.includes("connectionData")) return {}; // no authenticated user
+      if (url.includes("workitemtypes"))
+        return { value: [{ referenceName: "System.AssignedTo", alwaysRequired: true }] };
+      if (url.includes("/workitems/$")) return { id: 1, fields: {} };
+      return {};
+    });
+    const res = (await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    expect(res.content[0]!.text).not.toContain("Cannot create");
+    expect(calls.some((c) => c.url.includes("/workitems/$"))).toBe(true); // created anyway
+  });
+
+  it("wit_create retries without the auto @Me assignee if the first create fails, and notes it", async () => {
+    let createAttempts = 0;
+    const calls: Call[] = [];
+    const impl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      calls.push({ url: u, method: init?.method ?? "GET", auth: "", contentType: "", body });
+      let payload: unknown = {};
+      let status = 200;
+      if (u.includes("connectionData")) payload = { authenticatedUser: { providerDisplayName: "Me Dev" } };
+      else if (u.includes("workitemtypes")) payload = { value: [] };
+      else if (u.includes("/workitems/$")) {
+        createAttempts += 1;
+        if (createAttempts === 1) {
+          status = 400;
+          payload = { message: "TF401243: could not resolve identity 'Me Dev'." };
+        } else {
+          payload = { id: 7, fields: { "System.Title": "X" } };
+        }
+      }
+      return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const { server, tools } = fakeServer();
+    configureWorkItemsTools(server, createToolDeps({ config, logger, fetchImpl: impl }));
+
+    const res = (await tools.get("wit_create")!({ type: "Bug", title: "X", project: "Proj" }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const out = JSON.parse(res.content[0]!.text) as Record<string, unknown>;
+    expect(out.id).toBe(7);
+    expect(out.assignedTo).toBeNull();
+    expect(String(out.note)).toContain("could not auto-assign");
+    const creates = calls.filter((c) => c.url.includes("/workitems/$"));
+    expect(creates).toHaveLength(2);
+    // second (retry) create carries no AssignedTo op
+    expect((creates[1]!.body as Array<{ path: string }>).some((op) => op.path === "/fields/System.AssignedTo")).toBe(false);
   });
 
   it("wit_update PATCHes a JSON-Patch document by id", async () => {

@@ -49,6 +49,11 @@ function formatWorkItemDetail(item: unknown): ReturnType<typeof textResult> {
       if (!STRIP_WIT_TOP_LEVEL.has(k)) top[k] = v;
     }
 
+    // Surface the web link BEFORE cleanAdo strips `_links`: `_links.html.href`
+    // is the clickable ticket URL the user expects. (cleanAdo keeps `webUrl`.)
+    const htmlHref = (raw["_links"] as { html?: { href?: string } } | undefined)?.html?.href;
+    if (typeof htmlHref === "string") top["webUrl"] = htmlHref;
+
     // Truncate every field whose value looks like HTML (contains an opening tag).
     // This catches System.Description, ReproSteps, SystemInfo, History, etc.
     const fields = { ...(raw.fields as Record<string, unknown> | undefined) };
@@ -102,6 +107,53 @@ function fieldsToPatch(fields: Record<string, unknown>): JsonPatchOp[] {
   }));
 }
 
+/** Full REST url of a work item, used as the target of a relation (e.g. parent link). */
+function workItemApiUrl(serverUrl: string, collection: string, id: number): string {
+  return `${serverUrl.replace(/\/+$/, "")}/${encodeURIComponent(collection)}/_apis/wit/workItems/${id}`;
+}
+
+/**
+ * Compact, weak-LLM-friendly confirmation for a freshly created work item —
+ * crucially including the clickable `webUrl` (from `_links.html.href`, or built
+ * from config) so the user always gets a real link and can trust it was made.
+ */
+function compactCreated(
+  created: Record<string, unknown>,
+  serverUrl: string,
+  collection: string,
+  project: string,
+): Record<string, unknown> {
+  const fields = (created["fields"] as Record<string, unknown> | undefined) ?? {};
+  const id = created["id"];
+  const htmlHref = (created["_links"] as { html?: { href?: string } } | undefined)?.html?.href;
+  const webUrl =
+    typeof htmlHref === "string"
+      ? htmlHref
+      : `${serverUrl.replace(/\/+$/, "")}/${encodeURIComponent(collection)}/${encodeURIComponent(project)}/_workitems/edit/${id}`;
+  return {
+    id,
+    type: fields["System.WorkItemType"],
+    title: fields["System.Title"],
+    state: fields["System.State"],
+    assignedTo: cleanAdo(fields["System.AssignedTo"]),
+    webUrl,
+  };
+}
+
+/**
+ * The value the tool will default a field to when the user didn't supply one:
+ * a real (non-empty) `defaultValue`, else the *sole* allowed value. Returns
+ * undefined when there is no safe default — a multi-value pick-list is left for
+ * the user to choose (via guided mode) rather than guessing an arbitrary value.
+ * `""` is treated as "no default" so an empty defaultValue falls through.
+ */
+function pickDefault(f: { defaultValue?: unknown; allowedValues?: string[] }): unknown {
+  const dv = f.defaultValue;
+  if (dv !== undefined && dv !== null && dv !== "") return dv;
+  if (f.allowedValues && f.allowedValues.length === 1) return f.allowedValues[0];
+  return undefined;
+}
+
 export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "wit_query",
@@ -111,7 +163,9 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         "fetches the matched items' fields and returns them as a compact ticket list — same format " +
         "as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw " +
         "relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current " +
-        "sprint, state) — it handles identity resolution and iteration without requiring WIQL.",
+        "sprint, state) — it handles identity resolution and iteration without requiring WIQL. " +
+        "To find items by title, use wit_search (substring match on the title) — do NOT hand-write " +
+        "[System.Title] = '…' (exact match rarely matches).",
       inputSchema: {
         query: z
           .string()
@@ -347,32 +401,197 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
   server.registerTool(
     "wit_create",
     {
-      description: "Create a work item of the given type from a map of field reference names.",
+      description:
+        "Create a work item (Bug, Task, User Story, …). Only `type` and `title` are required — " +
+        "everything else is optional and defaults sensibly (project → ADO_DEFAULT_PROJECT, " +
+        "assignee → you). Returns the new item's id and clickable web link. " +
+        "Pass guided:true to FIRST see the type's required and common fields with their allowed " +
+        "values and defaults (nothing is created) so you can ask the user before creating.",
       inputSchema: {
-        project: z.string().min(1).describe("Project name or ID"),
         type: z.string().min(1).describe("Work item type, e.g. Bug, Task, User Story"),
+        title: z.string().min(1).describe("Work item title — the one thing always required"),
+        project: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project; defaults to ADO_DEFAULT_PROJECT if set"),
+        description: z.string().optional().describe("Description / details (plain text or HTML)"),
+        assignedTo: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Assignee display name; defaults to you (the authenticated user)"),
+        parent: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Parent work item id to link under (e.g. a User Story for a Task)"),
         fields: z
           .record(z.string(), z.unknown())
-          .refine((f) => Object.keys(f).length > 0, { message: "at least one field is required" })
+          .optional()
           .describe(
-            "Field map keyed by ADO field reference names. Common fields: " +
-              '"System.Title" (required), "System.Description", "System.AssignedTo" (display name), ' +
-              '"System.AreaPath", "System.IterationPath", "System.Tags", ' +
-              '"Microsoft.VSTS.Common.Priority" (1-4), "Microsoft.VSTS.Common.Severity", ' +
-              '"Microsoft.VSTS.TCM.ReproSteps" (for Bugs), "System.State". ' +
-              'Example: {"System.Title": "Fix login bug", "System.AssignedTo": "Alice Smith"}',
+            "Advanced/optional: any other ADO field by reference name → value, e.g. " +
+              '{"Microsoft.VSTS.Common.Priority": 2, "System.Tags": "login"}',
+          ),
+        guided: z
+          .boolean()
+          .optional()
+          .describe(
+            "If true, do NOT create — return the type's required and common fields with allowed " +
+              "values + defaults, so you can ask the user (Enter = default) before creating.",
           ),
       },
     },
-    async ({ project, type, fields }, extra) => {
+    async ({ type, title, project, description, assignedTo, parent, fields, guided }, extra) => {
       const client = deps.clientFor(patFromExtra(extra));
-      const created = await client.post(
-        `/_apis/wit/workitems/$${encodeURIComponent(type)}`,
-        fieldsToPatch(fields),
-        { project },
-        JSON_PATCH,
+      const effectiveProject = project ?? deps.config.defaultProject;
+      if (!effectiveProject) {
+        return textResult(
+          'No project given and ADO_DEFAULT_PROJECT is not set. Pass project: "<name>".',
+        );
+      }
+
+      // Guided mode: return the create "form" (required + common fields with
+      // allowed values and defaults) and create nothing. The agent asks the
+      // user, then calls wit_create again without `guided`.
+      if (guided) {
+        const typeFields = await client
+          .getWorkItemTypeFields(effectiveProject, type)
+          .catch(() => []);
+        const COMMON = new Set([
+          "System.AreaPath",
+          "System.IterationPath",
+          "Microsoft.VSTS.Common.Priority",
+        ]);
+        // Title and AssignedTo are handled automatically (title is given;
+        // assignee defaults to @Me), so they are never prompted here.
+        const AUTO = new Set(["System.Title", "System.AssignedTo"]);
+        const form = typeFields
+          .filter((f) => (f.alwaysRequired || COMMON.has(f.referenceName)) && !AUTO.has(f.referenceName))
+          .map((f) => ({
+            field: f.referenceName,
+            name: f.name,
+            required: !!f.alwaysRequired,
+            allowedValues: f.allowedValues,
+            default: pickDefault(f),
+          }));
+        return textResult(
+          JSON.stringify({
+            mode: "guided",
+            type,
+            project: effectiveProject,
+            instructions:
+              "Ask the user for these fields (Enter accepts the shown default), then call " +
+              "wit_create again WITHOUT guided, passing the chosen values in `fields`.",
+            fields: form,
+          }),
+        );
+      }
+
+      // Fast mode: assemble the field map. Title first; caller `fields` merged in.
+      const createFields: Record<string, unknown> = { "System.Title": title, ...(fields ?? {}) };
+      if (description !== undefined && createFields["System.Description"] === undefined) {
+        createFields["System.Description"] = description;
+      }
+      // Default assignee → the caller (@Me), unless one was provided. This is
+      // BEST-EFFORT: it must never break a type+title create (a display name
+      // can fail identity resolution on-prem), so `assigneeAuto` marks it for
+      // the retry-without-assignee fallback below.
+      let assigneeAuto = false;
+      if (assignedTo) {
+        createFields["System.AssignedTo"] = assignedTo;
+      } else if (createFields["System.AssignedTo"] === undefined) {
+        const me = (await client.getAuthenticatedIdentity())?.displayName;
+        if (me) {
+          createFields["System.AssignedTo"] = me;
+          assigneeAuto = true;
+        }
+      }
+
+      // Best-effort: auto-fill required fields where a SAFE default exists, else
+      // name the ones we can't so the user can choose (guided). Never guess a
+      // value from a multi-option pick-list, and never block on AssignedTo
+      // (best-effort above; ADO can auto-assign / leave it unassigned).
+      const NO_BLOCK = new Set([
+        "System.Title",
+        "System.AreaPath",
+        "System.IterationPath",
+        "System.State",
+        "System.Reason",
+        "System.AssignedTo",
+      ]);
+      const missingRequired: string[] = [];
+      try {
+        const typeFields = await client.getWorkItemTypeFields(effectiveProject, type);
+        for (const f of typeFields) {
+          if (!f.alwaysRequired || createFields[f.referenceName] !== undefined) continue;
+          if (NO_BLOCK.has(f.referenceName)) continue;
+          const def = pickDefault(f);
+          if (def !== undefined) createFields[f.referenceName] = def;
+          else missingRequired.push(f.name ? `${f.name} (${f.referenceName})` : f.referenceName);
+        }
+      } catch {
+        // Type metadata unavailable — proceed; ADO will reject if truly required.
+      }
+      if (missingRequired.length > 0) {
+        return textResult(
+          `Cannot create: the "${type}" type requires values for ${missingRequired.join(", ")}. ` +
+            "Re-run wit_create with guided:true to see the allowed values, then pass them in `fields`.",
+        );
+      }
+
+      const patch = fieldsToPatch(createFields);
+      if (parent !== undefined) {
+        // Hierarchy-Reverse links a child up to its parent.
+        patch.push({
+          op: "add",
+          path: "/relations/-",
+          value: {
+            rel: "System.LinkTypes.Hierarchy-Reverse",
+            url: workItemApiUrl(deps.config.serverUrl, deps.config.collection, parent),
+          },
+        });
+      }
+
+      const createPath = `/_apis/wit/workitems/$${encodeURIComponent(type)}`;
+      const doCreate = (p: JsonPatchOp[]) =>
+        client.post<Record<string, unknown>>(createPath, p, { project: effectiveProject }, JSON_PATCH);
+      let created: Record<string, unknown>;
+      try {
+        created = await doCreate(patch);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // The auto @Me assignee must never sink a type+title create: retry once
+        // without it, and tell the user assignment was skipped.
+        if (assigneeAuto) {
+          const noAssignee = patch.filter((op) => op.path !== "/fields/System.AssignedTo");
+          const retried = await doCreate(noAssignee).catch(() => undefined);
+          if (retried) {
+            const result = compactCreated(
+              retried,
+              deps.config.serverUrl,
+              deps.config.collection,
+              effectiveProject,
+            );
+            result["assignedTo"] = null;
+            result["note"] = `Created, but could not auto-assign it to you (${msg}). Assign it manually if needed.`;
+            return textResult(JSON.stringify(result));
+          }
+        }
+        if (parent !== undefined) {
+          return textResult(
+            `Could not create the work item (${msg}). If parent ${parent} is wrong or from another ` +
+              "project/collection, correct or omit it.",
+          );
+        }
+        throw err;
+      }
+      return textResult(
+        JSON.stringify(
+          compactCreated(created, deps.config.serverUrl, deps.config.collection, effectiveProject),
+        ),
       );
-      return formatWorkItemDetail(created);
     },
   );
 
