@@ -140,6 +140,20 @@ function compactCreated(
   };
 }
 
+/**
+ * The value the tool will default a field to when the user didn't supply one:
+ * a real (non-empty) `defaultValue`, else the *sole* allowed value. Returns
+ * undefined when there is no safe default — a multi-value pick-list is left for
+ * the user to choose (via guided mode) rather than guessing an arbitrary value.
+ * `""` is treated as "no default" so an empty defaultValue falls through.
+ */
+function pickDefault(f: { defaultValue?: unknown; allowedValues?: string[] }): unknown {
+  const dv = f.defaultValue;
+  if (dv !== undefined && dv !== null && dv !== "") return dv;
+  if (f.allowedValues && f.allowedValues.length === 1) return f.allowedValues[0];
+  return undefined;
+}
+
 export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "wit_query",
@@ -150,7 +164,7 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         "as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw " +
         "relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current " +
         "sprint, state) — it handles identity resolution and iteration without requiring WIQL. " +
-        "To find items by title/text, use wit_search (substring match) — do NOT hand-write " +
+        "To find items by title, use wit_search (substring match on the title) — do NOT hand-write " +
         "[System.Title] = '…' (exact match rarely matches).",
       inputSchema: {
         query: z
@@ -445,25 +459,22 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         const typeFields = await client
           .getWorkItemTypeFields(effectiveProject, type)
           .catch(() => []);
-        const me = (await client.getAuthenticatedIdentity())?.displayName;
         const COMMON = new Set([
           "System.AreaPath",
           "System.IterationPath",
-          "System.AssignedTo",
           "Microsoft.VSTS.Common.Priority",
         ]);
+        // Title and AssignedTo are handled automatically (title is given;
+        // assignee defaults to @Me), so they are never prompted here.
+        const AUTO = new Set(["System.Title", "System.AssignedTo"]);
         const form = typeFields
-          .filter((f) => (f.alwaysRequired || COMMON.has(f.referenceName)) && f.referenceName !== "System.Title")
+          .filter((f) => (f.alwaysRequired || COMMON.has(f.referenceName)) && !AUTO.has(f.referenceName))
           .map((f) => ({
             field: f.referenceName,
             name: f.name,
             required: !!f.alwaysRequired,
             allowedValues: f.allowedValues,
-            default:
-              f.referenceName === "System.AssignedTo"
-                ? me
-                : (f.defaultValue ??
-                  (f.allowedValues && f.allowedValues.length === 1 ? f.allowedValues[0] : undefined)),
+            default: pickDefault(f),
           }));
         return textResult(
           JSON.stringify({
@@ -483,30 +494,41 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
       if (description !== undefined && createFields["System.Description"] === undefined) {
         createFields["System.Description"] = description;
       }
-      // Default assignee → the caller (@Me), unless one was provided.
+      // Default assignee → the caller (@Me), unless one was provided. This is
+      // BEST-EFFORT: it must never break a type+title create (a display name
+      // can fail identity resolution on-prem), so `assigneeAuto` marks it for
+      // the retry-without-assignee fallback below.
+      let assigneeAuto = false;
       if (assignedTo) {
         createFields["System.AssignedTo"] = assignedTo;
       } else if (createFields["System.AssignedTo"] === undefined) {
         const me = (await client.getAuthenticatedIdentity())?.displayName;
-        if (me) createFields["System.AssignedTo"] = me;
+        if (me) {
+          createFields["System.AssignedTo"] = me;
+          assigneeAuto = true;
+        }
       }
 
-      // Best-effort: auto-fill required fields we can, else name the ones we can't.
+      // Best-effort: auto-fill required fields where a SAFE default exists, else
+      // name the ones we can't so the user can choose (guided). Never guess a
+      // value from a multi-option pick-list, and never block on AssignedTo
+      // (best-effort above; ADO can auto-assign / leave it unassigned).
+      const NO_BLOCK = new Set([
+        "System.Title",
+        "System.AreaPath",
+        "System.IterationPath",
+        "System.State",
+        "System.Reason",
+        "System.AssignedTo",
+      ]);
       const missingRequired: string[] = [];
       try {
         const typeFields = await client.getWorkItemTypeFields(effectiveProject, type);
         for (const f of typeFields) {
           if (!f.alwaysRequired || createFields[f.referenceName] !== undefined) continue;
-          // ADO auto-defaults these (area/iteration → project root; state/reason).
-          if (
-            ["System.Title", "System.AreaPath", "System.IterationPath", "System.State", "System.Reason"].includes(
-              f.referenceName,
-            )
-          )
-            continue;
-          const def =
-            f.defaultValue ?? (f.allowedValues && f.allowedValues.length > 0 ? f.allowedValues[0] : undefined);
-          if (def !== undefined && def !== null && def !== "") createFields[f.referenceName] = def;
+          if (NO_BLOCK.has(f.referenceName)) continue;
+          const def = pickDefault(f);
+          if (def !== undefined) createFields[f.referenceName] = def;
           else missingRequired.push(f.name ? `${f.name} (${f.referenceName})` : f.referenceName);
         }
       } catch {
@@ -532,12 +554,39 @@ export function configureWorkItemsTools(server: McpServer, deps: ToolDeps): void
         });
       }
 
-      const created = await client.post<Record<string, unknown>>(
-        `/_apis/wit/workitems/$${encodeURIComponent(type)}`,
-        patch,
-        { project: effectiveProject },
-        JSON_PATCH,
-      );
+      const createPath = `/_apis/wit/workitems/$${encodeURIComponent(type)}`;
+      const doCreate = (p: JsonPatchOp[]) =>
+        client.post<Record<string, unknown>>(createPath, p, { project: effectiveProject }, JSON_PATCH);
+      let created: Record<string, unknown>;
+      try {
+        created = await doCreate(patch);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // The auto @Me assignee must never sink a type+title create: retry once
+        // without it, and tell the user assignment was skipped.
+        if (assigneeAuto) {
+          const noAssignee = patch.filter((op) => op.path !== "/fields/System.AssignedTo");
+          const retried = await doCreate(noAssignee).catch(() => undefined);
+          if (retried) {
+            const result = compactCreated(
+              retried,
+              deps.config.serverUrl,
+              deps.config.collection,
+              effectiveProject,
+            );
+            result["assignedTo"] = null;
+            result["note"] = `Created, but could not auto-assign it to you (${msg}). Assign it manually if needed.`;
+            return textResult(JSON.stringify(result));
+          }
+        }
+        if (parent !== undefined) {
+          return textResult(
+            `Could not create the work item (${msg}). If parent ${parent} is wrong or from another ` +
+              "project/collection, correct or omit it.",
+          );
+        }
+        throw err;
+      }
       return textResult(
         JSON.stringify(
           compactCreated(created, deps.config.serverUrl, deps.config.collection, effectiveProject),

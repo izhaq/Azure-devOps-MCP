@@ -100,6 +100,21 @@ No new keys. Reuses `ADO_DEFAULT_PROJECT`.
 - [ ] `wit_query` steers title lookups to `wit_search`.
 - [ ] Tests pass at the fetchImpl seam; coverage thresholds met; bundle rebuilt.
 
+## Review hardening (applied)
+
+- **Assignee never breaks a create.** The auto @Me assignee is best-effort: if a
+  create fails with it set, the tool retries once *without* it and returns the
+  ticket plus a "could not auto-assign" note. `System.AssignedTo` is never a
+  blocking required field.
+- **No silent wrong values.** Fast mode only auto-fills a required field when a
+  real (non-empty) `defaultValue` or a *single* allowed value exists; multi-
+  option pick-lists are deferred to guided mode instead of guessing
+  `allowedValues[0]`. Empty-string defaults fall through correctly.
+- **Friendly parent errors.** A bad `parent` id yields a clear message, not a
+  raw ADO throw.
+- **Accurate steer.** `wit_query` points title lookups at `wit_search` (title
+  substring), not "title/text" (it is title-only).
+
 ## Live-verify (human, on-prem)
 
 - Exact `connectionData` / `workitemtypes/{type}/fields` shapes on the 7.1 build.

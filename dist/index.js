@@ -31643,11 +31643,17 @@ function compactCreated(created, serverUrl, collection, project) {
     webUrl
   };
 }
+function pickDefault(f) {
+  const dv = f.defaultValue;
+  if (dv !== void 0 && dv !== null && dv !== "") return dv;
+  if (f.allowedValues && f.allowedValues.length === 1) return f.allowedValues[0];
+  return void 0;
+}
 function configureWorkItemsTools(server, deps) {
   server.registerTool(
     "wit_query",
     {
-      description: "Run a WIQL (Work Item Query Language) query. For flat queries (SELECT \u2026 FROM WorkItems), fetches the matched items' fields and returns them as a compact ticket list \u2014 same format as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current sprint, state) \u2014 it handles identity resolution and iteration without requiring WIQL. To find items by title/text, use wit_search (substring match) \u2014 do NOT hand-write [System.Title] = '\u2026' (exact match rarely matches).",
+      description: "Run a WIQL (Work Item Query Language) query. For flat queries (SELECT \u2026 FROM WorkItems), fetches the matched items' fields and returns them as a compact ticket list \u2014 same format as wit_list_my_work_items. For hierarchical queries (FROM WorkItemLinks), returns the raw relation graph. Prefer wit_list_my_work_items for everyday filtering (my tickets, current sprint, state) \u2014 it handles identity resolution and iteration without requiring WIQL. To find items by title, use wit_search (substring match on the title) \u2014 do NOT hand-write [System.Title] = '\u2026' (exact match rarely matches).",
       inputSchema: {
         query: external_exports.string().min(1).describe(
           "WIQL query text, e.g. 'SELECT [System.Id] FROM WorkItems WHERE [System.AssignedTo] = @Me'"
@@ -31804,19 +31810,18 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
       }
       if (guided) {
         const typeFields = await client.getWorkItemTypeFields(effectiveProject, type).catch(() => []);
-        const me = (await client.getAuthenticatedIdentity())?.displayName;
         const COMMON = /* @__PURE__ */ new Set([
           "System.AreaPath",
           "System.IterationPath",
-          "System.AssignedTo",
           "Microsoft.VSTS.Common.Priority"
         ]);
-        const form = typeFields.filter((f) => (f.alwaysRequired || COMMON.has(f.referenceName)) && f.referenceName !== "System.Title").map((f) => ({
+        const AUTO = /* @__PURE__ */ new Set(["System.Title", "System.AssignedTo"]);
+        const form = typeFields.filter((f) => (f.alwaysRequired || COMMON.has(f.referenceName)) && !AUTO.has(f.referenceName)).map((f) => ({
           field: f.referenceName,
           name: f.name,
           required: !!f.alwaysRequired,
           allowedValues: f.allowedValues,
-          default: f.referenceName === "System.AssignedTo" ? me : f.defaultValue ?? (f.allowedValues && f.allowedValues.length === 1 ? f.allowedValues[0] : void 0)
+          default: pickDefault(f)
         }));
         return textResult(
           JSON.stringify({
@@ -31832,23 +31837,32 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
       if (description !== void 0 && createFields["System.Description"] === void 0) {
         createFields["System.Description"] = description;
       }
+      let assigneeAuto = false;
       if (assignedTo) {
         createFields["System.AssignedTo"] = assignedTo;
       } else if (createFields["System.AssignedTo"] === void 0) {
         const me = (await client.getAuthenticatedIdentity())?.displayName;
-        if (me) createFields["System.AssignedTo"] = me;
+        if (me) {
+          createFields["System.AssignedTo"] = me;
+          assigneeAuto = true;
+        }
       }
+      const NO_BLOCK = /* @__PURE__ */ new Set([
+        "System.Title",
+        "System.AreaPath",
+        "System.IterationPath",
+        "System.State",
+        "System.Reason",
+        "System.AssignedTo"
+      ]);
       const missingRequired = [];
       try {
         const typeFields = await client.getWorkItemTypeFields(effectiveProject, type);
         for (const f of typeFields) {
           if (!f.alwaysRequired || createFields[f.referenceName] !== void 0) continue;
-          if (["System.Title", "System.AreaPath", "System.IterationPath", "System.State", "System.Reason"].includes(
-            f.referenceName
-          ))
-            continue;
-          const def = f.defaultValue ?? (f.allowedValues && f.allowedValues.length > 0 ? f.allowedValues[0] : void 0);
-          if (def !== void 0 && def !== null && def !== "") createFields[f.referenceName] = def;
+          if (NO_BLOCK.has(f.referenceName)) continue;
+          const def = pickDefault(f);
+          if (def !== void 0) createFields[f.referenceName] = def;
           else missingRequired.push(f.name ? `${f.name} (${f.referenceName})` : f.referenceName);
         }
       } catch {
@@ -31869,12 +31883,35 @@ Note: results capped at ${cap}. Add a tighter WHERE clause or raise "top".` : ""
           }
         });
       }
-      const created = await client.post(
-        `/_apis/wit/workitems/$${encodeURIComponent(type)}`,
-        patch,
-        { project: effectiveProject },
-        JSON_PATCH
-      );
+      const createPath = `/_apis/wit/workitems/$${encodeURIComponent(type)}`;
+      const doCreate = (p) => client.post(createPath, p, { project: effectiveProject }, JSON_PATCH);
+      let created;
+      try {
+        created = await doCreate(patch);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (assigneeAuto) {
+          const noAssignee = patch.filter((op) => op.path !== "/fields/System.AssignedTo");
+          const retried = await doCreate(noAssignee).catch(() => void 0);
+          if (retried) {
+            const result = compactCreated(
+              retried,
+              deps.config.serverUrl,
+              deps.config.collection,
+              effectiveProject
+            );
+            result["assignedTo"] = null;
+            result["note"] = `Created, but could not auto-assign it to you (${msg}). Assign it manually if needed.`;
+            return textResult(JSON.stringify(result));
+          }
+        }
+        if (parent !== void 0) {
+          return textResult(
+            `Could not create the work item (${msg}). If parent ${parent} is wrong or from another project/collection, correct or omit it.`
+          );
+        }
+        throw err;
+      }
       return textResult(
         JSON.stringify(
           compactCreated(created, deps.config.serverUrl, deps.config.collection, effectiveProject)
