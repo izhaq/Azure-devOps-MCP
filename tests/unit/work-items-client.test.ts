@@ -94,3 +94,44 @@ describe("AzureDevOpsClient.resolveIdentity", () => {
     expect(await client.resolveIdentity("dan levi")).toBe("Dan Levi");
   });
 });
+
+describe("AzureDevOpsClient.getAuthenticatedIdentity", () => {
+  it("returns the authenticated user's display name and caches it", async () => {
+    const { calls, impl } = recording(() =>
+      json({ authenticatedUser: { providerDisplayName: "Me Dev" } }),
+    );
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    expect(await client.getAuthenticatedIdentity()).toEqual({ displayName: "Me Dev" });
+    await client.getAuthenticatedIdentity();
+    expect(calls.filter((c) => c.url.includes("connectionData"))).toHaveLength(1); // cached
+  });
+
+  it("returns undefined (never throws) when connectionData fails", async () => {
+    const { impl } = recording(() => json({ message: "boom" }, 500));
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    expect(await client.getAuthenticatedIdentity()).toBeUndefined();
+  });
+});
+
+describe("AzureDevOpsClient.getWorkItemTypeFields", () => {
+  it("maps referenceName, alwaysRequired, and allowedValues", async () => {
+    const { calls, impl } = recording(() =>
+      json({
+        value: [
+          { referenceName: "System.Title", name: "Title", alwaysRequired: true },
+          {
+            referenceName: "Microsoft.VSTS.Common.Priority",
+            name: "Priority",
+            allowedValues: ["1", "2", "3", "4"],
+          },
+        ],
+      }),
+    );
+    const client = new AzureDevOpsClient({ ...baseOpts, fetchImpl: impl });
+    const fields = await client.getWorkItemTypeFields("Proj", "Bug");
+    expect(calls[0]!.url).toContain("/Proj/_apis/wit/workitemtypes/Bug/fields");
+    expect(calls[0]!.url).toContain("%24expand=allowedValues");
+    expect(fields[0]).toMatchObject({ referenceName: "System.Title", alwaysRequired: true });
+    expect(fields[1]!.allowedValues).toEqual(["1", "2", "3", "4"]);
+  });
+});
